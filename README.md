@@ -160,12 +160,78 @@ r.Overeni = true
 resp, err := d.SendPayment(r) // resp.Overeno == true, tržba se NEeviduje
 ```
 
+### Obnova pokladního certifikátu
+
+Pokladní certifikát platí 366 dní. Před koncem platnosti ho Dispatcher umí obnovit sám přes
+API certifikační autority EET. Přihlásí se stávajícím certifikátem, takže nic dalšího
+nepotřebujete. Obnovit je nutné, **dokud starý certifikát ještě platí**. Finanční správa
+doporučuje 2–3 týdny předem.
+
+```go
+if time.Until(d.Certificate().NotAfter) < 21*24*time.Hour {
+	// Podá žádost (nebo naváže na rozpracovanou), počká na vydání a stáhne nový certifikát.
+	renewal, err := d.RenewCertificate(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 1. Nejdřív nový certifikát bezpečně uložte.
+	if err := db.SaveCert(renewal.P12, renewal.Heslo); err != nil {
+		return err // nic se neztratí, příští RenewCertificate stáhne tentýž certifikát znovu
+	}
+
+	// 2. Teprve pak potvrďte převzetí. Dispatcher se tím přepne na nový certifikát.
+	if err := renewal.Confirm(ctx); err != nil {
+		return err
+	}
+}
+```
+
+Na pořadí záleží: **po `Confirm` už certifikát u CA znovu stáhnout nejde.** Proto knihovna převzetí
+nikdy nepotvrzuje sama a Dispatcher až do `Confirm` dál podepisuje starým certifikátem.
+
+Co se stane, když něco selže:
+
+- **Pád aplikace nebo vypršení `ctx` kdykoli před `Confirm`:** žádost u CA zůstává. Další volání
+  `RenewCertificate` ji najde a stáhne tentýž certifikát znovu, novou žádost nepodává.
+  Nevyzvednutý certifikát CA drží 30 dní od vydání.
+- **`Confirm` zapomenete zavolat:** Dispatcher zůstane u starého certifikátu a po 30 dnech CA
+  stažená data smaže. Nový `RenewCertificate` to napraví.
+- **Odpověď na `Confirm` se ztratí po cestě:** opakované `Confirm` je bezpečné, knihovna pozná,
+  že převzetí už bylo potvrzeno.
+- **CA žádost zamítne:** vrátí se `*eet2.RejectedError` s důvodem.
+- **Chyba API CA:** vrátí se `*eet2.CAError`. `Temporary()` je `true` u přetížení (HTTP 429)
+  a chyb serveru, `RetryAfter` říká, za jak dlouho to zkusit znovu.
+
+`P12` a `Heslo` jsou citlivé údaje: nelogujte je a neukládejte nešifrovaně. `fmt.Print(renewal)`
+je záměrně nevypisuje.
+
+Pro `ProductionService` se použije produkční CA (`https://ca.caeet.gov.cz/api`) automaticky.
+Jinak ji nastavte ručně:
+
+```go
+d, err := eet2.NewDispatcherFromP12(eet2.PlaygroundService, p12, heslo,
+	eet2.WithCAService(eet2.CATestService), // nebo eet2.CAZkusebniService
+)
+```
+
+Certifikát stažený ručně z DIS+ (portál MOJE daně) vyměníte za běhu bez restartu:
+
+```go
+err := d.UpdateCertificateFromP12(p12, heslo)
+```
+
+Výměna je bezpečná i při souběžném odesílání. Rozpracovaná odeslání doběhnou se starým
+certifikátem, další použijí nový. Tržby čekající ve frontě na opakované odeslání se tak
+podepíšou aktuálně platným certifikátem, jak to specifikace vyžaduje.
+
 ### Nastavení
 
 ```go
 d, err := eet2.NewDispatcherFromP12(eet2.ProductionService, p12, heslo,
 	eet2.WithTimeout(5*time.Second),  // mezní doba odezvy, minimum 2 s (výchozí 3 s)
 	eet2.WithHTTPClient(myClient),    // vlastní HTTP klient
+	eet2.WithCAService(eet2.CATestService), // API CA EET pro obnovu certifikátu
 )
 ```
 
@@ -203,6 +269,9 @@ go test ./...
   a `openssl dgst -verify`.
 - Odesílání, chybové kódy, timeouty a načítání certifikátů (PKCS#12, PEM) se testují proti
   lokálnímu testovacímu serveru.
+- Obnova certifikátu se testuje proti simulované CA EET podle oficiální specifikace API
+  (`caeetapi_jwt.yml`). Simulace ověřuje podpis JWT i otisk `x5t#S256` a pokrývá navázání
+  po pádu, zamítnutí, ztracené potvrzení i vypršení starého certifikátu.
 
 Proti skutečnému playgroundu si knihovnu vyzkoušíte testovacím certifikátem z balíčku
 `CAEET_Playground_2026_v1.zip` ([Dokumenty ke stažení](https://eet.gov.cz/cs/pro-vyvojare/dokumenty-ke-stazeni)):
@@ -216,6 +285,8 @@ go run ./example/playground -p12 CA_EETPlayground-CZ00000019.p12 -heslo <heslo>
 - Elektronický podpis potvrzovací zprávy se zatím neověřuje. Pravost odpovědi zajišťuje
   TLS spojení s ověřeným certifikátem serveru.
 - Knihovna neřeší frontu pro opakované odesílání ani ukládání tržeb. To patří do aplikace.
+- Obnova certifikátu zatím nebyla vyzkoušena proti skutečné CA EET, jen proti simulaci podle
+  specifikace. Dokumentace také neuvádí, které prostředí CA odpovídá playgroundu.
 
 ## Inspirace
 
@@ -228,6 +299,8 @@ go run ./example/playground -p12 CA_EETPlayground-CZ00000019.p12 -heslo <heslo>
 - Formát a struktura údajů o evidované tržbě a popis datového rozhraní, verze 1.2
 - Popis položek datové zprávy s příklady jejich vyplnění, verze 1.0
 - Přístupové a provozní informace pro playground a produkci, verze 1.1
+- Certifikační autorita EET v2.0, Postupy získání pokladního certifikátu a definice API
+  `caeetapi_jwt.yml`
 
 Knihovna není oficiálním produktem finanční správy a nijak s ní nesouvisí.
 

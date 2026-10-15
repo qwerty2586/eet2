@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"software.sslmate.com/src/go-pkcs12"
@@ -37,14 +38,47 @@ const (
 	DefaultTimeout = 3 * time.Second
 )
 
-// Dispatcher odesílá tržby do systému EET. Je bezpečný pro souběžné použití.
+// Dispatcher odesílá tržby do systému EET. Je bezpečný pro souběžné použití,
+// včetně výměny certifikátu za běhu (UpdateCertificate, Renewal.Confirm).
 type Dispatcher struct {
 	service Service
-	cert    *x509.Certificate
-	key     crypto.Signer
+	ca      CAService
+	cred    atomic.Pointer[credentials]
 	client  *http.Client
 	timeout time.Duration
 	now     func() time.Time
+}
+
+// credentials je pokladní certifikát s klíčem. Mění se vždy celé najednou.
+type credentials struct {
+	cert *x509.Certificate
+	key  crypto.Signer
+}
+
+func newCredentials(cert *x509.Certificate, key crypto.Signer) (*credentials, error) {
+	if cert == nil || key == nil {
+		return nil, errors.New("eet2: chybí certifikát nebo klíč")
+	}
+	pub, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("eet2: pokladní certifikát musí mít RSA klíč")
+	}
+	if kp, ok := key.Public().(*rsa.PublicKey); !ok || !kp.Equal(pub) {
+		return nil, errors.New("eet2: privátní klíč nepatří k certifikátu")
+	}
+	return &credentials{cert: cert, key: key}, nil
+}
+
+func credentialsFromP12(p12 []byte, password string) (*credentials, error) {
+	key, cert, _, err := pkcs12.DecodeChain(p12, password)
+	if err != nil {
+		return nil, fmt.Errorf("eet2: dekódování PKCS#12: %w", err)
+	}
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		return nil, errors.New("eet2: privátní klíč v PKCS#12 nelze použít k podpisu")
+	}
+	return newCredentials(cert, signer)
 }
 
 // Option upravuje nastavení Dispatcheru.
@@ -79,15 +113,11 @@ func NewDispatcher(service Service, p12File, password string, opts ...Option) (*
 // NewDispatcherFromP12 načte pokladní certifikát z obsahu souboru PKCS#12
 // (.p12/.pfx) v paměti, např. z databáze nebo trezoru tajemství.
 func NewDispatcherFromP12(service Service, p12 []byte, password string, opts ...Option) (*Dispatcher, error) {
-	key, cert, _, err := pkcs12.DecodeChain(p12, password)
+	c, err := credentialsFromP12(p12, password)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: dekódování PKCS#12: %w", err)
+		return nil, err
 	}
-	signer, ok := key.(crypto.Signer)
-	if !ok {
-		return nil, errors.New("eet2: privátní klíč v PKCS#12 nelze použít k podpisu")
-	}
-	return NewDispatcherWithSigner(service, cert, signer, opts...)
+	return newDispatcher(service, c, opts)
 }
 
 // NewDispatcherFromPEM načte certifikát a privátní klíč ve formátu PEM.
@@ -144,25 +174,25 @@ func NewDispatcherFromPEM(service Service, certPEM, keyPEM []byte, opts ...Optio
 // NewDispatcherWithSigner použije již načtený certifikát a klíč. Hodí se pro
 // klíče v HSM nebo cloudovém KMS, které implementují crypto.Signer.
 func NewDispatcherWithSigner(service Service, cert *x509.Certificate, key crypto.Signer, opts ...Option) (*Dispatcher, error) {
-	if cert == nil || key == nil {
-		return nil, errors.New("eet2: chybí certifikát nebo klíč")
+	c, err := newCredentials(cert, key)
+	if err != nil {
+		return nil, err
 	}
-	pub, ok := cert.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("eet2: pokladní certifikát musí mít RSA klíč")
-	}
-	if kp, ok := key.Public().(*rsa.PublicKey); !ok || !kp.Equal(pub) {
-		return nil, errors.New("eet2: privátní klíč nepatří k certifikátu")
-	}
+	return newDispatcher(service, c, opts)
+}
+
+func newDispatcher(service Service, c *credentials, opts []Option) (*Dispatcher, error) {
 	d := &Dispatcher{
 		service: service,
-		cert:    cert,
-		key:     key,
 		timeout: DefaultTimeout,
 		now:     time.Now,
 	}
+	d.cred.Store(c)
 	for _, o := range opts {
 		o(d)
+	}
+	if d.ca == "" && service == ProductionService {
+		d.ca = CAProductionService
 	}
 	if d.client == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -174,8 +204,30 @@ func NewDispatcherWithSigner(service Service, cert *x509.Certificate, key crypto
 	return d, nil
 }
 
-// Certificate vrátí pokladní certifikát (např. pro kontrolu platnosti NotAfter).
-func (d *Dispatcher) Certificate() *x509.Certificate { return d.cert }
+// Certificate vrátí aktuální pokladní certifikát (např. pro kontrolu NotAfter).
+func (d *Dispatcher) Certificate() *x509.Certificate { return d.cred.Load().cert }
+
+// UpdateCertificate vymění pokladní certifikát za běhu. Probíhající odeslání
+// doběhnou se starým certifikátem, další už použijí nový.
+func (d *Dispatcher) UpdateCertificate(cert *x509.Certificate, key crypto.Signer) error {
+	c, err := newCredentials(cert, key)
+	if err != nil {
+		return err
+	}
+	d.cred.Store(c)
+	return nil
+}
+
+// UpdateCertificateFromP12 vymění pokladní certifikát za běhu za certifikát
+// z obsahu souboru PKCS#12, např. nově stažený z DIS+.
+func (d *Dispatcher) UpdateCertificateFromP12(p12 []byte, password string) error {
+	c, err := credentialsFromP12(p12, password)
+	if err != nil {
+		return err
+	}
+	d.cred.Store(c)
+	return nil
+}
 
 // BuildRequest sestaví a podepíše datovou zprávu bez odeslání. Vrací XML
 // a UUID zprávy. Hodí se pro ladění nebo vlastní transport.
@@ -184,7 +236,8 @@ func (d *Dispatcher) BuildRequest(r Receipt) (xml []byte, uuid string, err error
 	if err != nil {
 		return nil, "", err
 	}
-	xml, err = buildEnvelope(hlavicka, data, d.cert, d.key)
+	c := d.cred.Load()
+	xml, err = buildEnvelope(hlavicka, data, c.cert, c.key)
 	if err != nil {
 		return nil, "", err
 	}
