@@ -19,27 +19,27 @@ import (
 	"software.sslmate.com/src/go-pkcs12"
 )
 
-// Service je adresa webové služby EET.
+// Service is the address of the EET web service.
 type Service string
 
 const (
-	// PlaygroundService je neprodukční prostředí pro vývojáře.
-	// Vrácený POK končí na "-ff" a není platný.
+	// PlaygroundService is the non-production environment for developers.
+	// The returned POK ends with "-ff" and is not valid.
 	PlaygroundService Service = "https://pg.trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4"
 
-	// ProductionService je produkční prostředí.
+	// ProductionService is the production environment.
 	ProductionService Service = "https://trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4"
 )
 
 const (
-	// MinTimeout je nejkratší mezní doba odezvy, kterou zákon připouští.
+	// MinTimeout is the shortest response time limit the law allows.
 	MinTimeout = 2 * time.Second
-	// DefaultTimeout je výchozí mezní doba odezvy.
+	// DefaultTimeout is the default response time limit.
 	DefaultTimeout = 3 * time.Second
 )
 
-// Dispatcher odesílá tržby do systému EET. Je bezpečný pro souběžné použití,
-// včetně výměny certifikátu za běhu (UpdateCertificate, Renewal.Confirm).
+// Dispatcher sends sales to EET. It is safe for concurrent use, including
+// swapping the certificate at runtime (UpdateCertificate, Renewal.Confirm).
 type Dispatcher struct {
 	service Service
 	ca      CAService
@@ -49,7 +49,7 @@ type Dispatcher struct {
 	now     func() time.Time
 }
 
-// credentials je pokladní certifikát s klíčem. Mění se vždy celé najednou.
+// credentials is the cash register certificate with its key. Always replaced as a whole.
 type credentials struct {
 	cert *x509.Certificate
 	key  crypto.Signer
@@ -57,14 +57,14 @@ type credentials struct {
 
 func newCredentials(cert *x509.Certificate, key crypto.Signer) (*credentials, error) {
 	if cert == nil || key == nil {
-		return nil, errors.New("eet2: chybí certifikát nebo klíč")
+		return nil, errors.New("eet2: missing certificate or key")
 	}
 	pub, ok := cert.PublicKey.(*rsa.PublicKey)
 	if !ok {
-		return nil, errors.New("eet2: pokladní certifikát musí mít RSA klíč")
+		return nil, errors.New("eet2: the certificate must have an RSA key")
 	}
 	if kp, ok := key.Public().(*rsa.PublicKey); !ok || !kp.Equal(pub) {
-		return nil, errors.New("eet2: privátní klíč nepatří k certifikátu")
+		return nil, errors.New("eet2: the private key does not match the certificate")
 	}
 	return &credentials{cert: cert, key: key}, nil
 }
@@ -72,20 +72,20 @@ func newCredentials(cert *x509.Certificate, key crypto.Signer) (*credentials, er
 func credentialsFromP12(p12 []byte, password string) (*credentials, error) {
 	key, cert, _, err := pkcs12.DecodeChain(p12, password)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: dekódování PKCS#12: %w", err)
+		return nil, fmt.Errorf("eet2: decoding PKCS#12: %w", err)
 	}
 	signer, ok := key.(crypto.Signer)
 	if !ok {
-		return nil, errors.New("eet2: privátní klíč v PKCS#12 nelze použít k podpisu")
+		return nil, errors.New("eet2: the private key in PKCS#12 cannot sign")
 	}
 	return newCredentials(cert, signer)
 }
 
-// Option upravuje nastavení Dispatcheru.
+// Option configures a Dispatcher.
 type Option func(*Dispatcher)
 
-// WithTimeout nastaví mezní dobu odezvy. Hodnoty pod MinTimeout (2 s)
-// se zvýší na MinTimeout.
+// WithTimeout sets the response time limit. Values below MinTimeout (2 s)
+// are raised to MinTimeout.
 func WithTimeout(t time.Duration) Option {
 	return func(d *Dispatcher) {
 		if t < MinTimeout {
@@ -95,23 +95,23 @@ func WithTimeout(t time.Duration) Option {
 	}
 }
 
-// WithHTTPClient nastaví vlastního HTTP klienta (proxy, vlastní transport…).
-// Klient musí ověřovat TLS certifikát serveru.
+// WithHTTPClient sets a custom HTTP client (proxy, custom transport…).
+// The client must verify the server's TLS certificate.
 func WithHTTPClient(c *http.Client) Option {
 	return func(d *Dispatcher) { d.client = c }
 }
 
-// NewDispatcher načte pokladní certifikát ze souboru PKCS#12 (.p12/.pfx).
+// NewDispatcher loads the cash register certificate from a PKCS#12 file (.p12/.pfx).
 func NewDispatcher(service Service, p12File, password string, opts ...Option) (*Dispatcher, error) {
 	data, err := os.ReadFile(p12File)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: čtení certifikátu: %w", err)
+		return nil, fmt.Errorf("eet2: reading certificate: %w", err)
 	}
 	return NewDispatcherFromP12(service, data, password, opts...)
 }
 
-// NewDispatcherFromP12 načte pokladní certifikát z obsahu souboru PKCS#12
-// (.p12/.pfx) v paměti, např. z databáze nebo trezoru tajemství.
+// NewDispatcherFromP12 loads the cash register certificate from PKCS#12
+// (.p12/.pfx) content in memory, e.g. from a database or a secrets vault.
 func NewDispatcherFromP12(service Service, p12 []byte, password string, opts ...Option) (*Dispatcher, error) {
 	c, err := credentialsFromP12(p12, password)
 	if err != nil {
@@ -120,9 +120,9 @@ func NewDispatcherFromP12(service Service, p12 []byte, password string, opts ...
 	return newDispatcher(service, c, opts)
 }
 
-// NewDispatcherFromPEM načte certifikát a privátní klíč ve formátu PEM.
-// Klíč může být PKCS#1 ("RSA PRIVATE KEY") nebo PKCS#8 ("PRIVATE KEY").
-// certPEM i keyPEM mohou být i jeden společný soubor s oběma bloky.
+// NewDispatcherFromPEM loads the certificate and private key in PEM format.
+// The key may be PKCS#1 ("RSA PRIVATE KEY") or PKCS#8 ("PRIVATE KEY").
+// certPEM and keyPEM may also be one file containing both blocks.
 func NewDispatcherFromPEM(service Service, certPEM, keyPEM []byte, opts ...Option) (*Dispatcher, error) {
 	var cert *x509.Certificate
 	var key crypto.Signer
@@ -139,40 +139,40 @@ func NewDispatcherFromPEM(service Service, certPEM, keyPEM []byte, opts ...Optio
 				if cert == nil {
 					c, err := x509.ParseCertificate(block.Bytes)
 					if err != nil {
-						return nil, fmt.Errorf("eet2: certifikát: %w", err)
+						return nil, fmt.Errorf("eet2: certificate: %w", err)
 					}
 					cert = c
 				}
 			case "RSA PRIVATE KEY":
 				k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 				if err != nil {
-					return nil, fmt.Errorf("eet2: privátní klíč: %w", err)
+					return nil, fmt.Errorf("eet2: private key: %w", err)
 				}
 				key = k
 			case "PRIVATE KEY":
 				k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 				if err != nil {
-					return nil, fmt.Errorf("eet2: privátní klíč: %w", err)
+					return nil, fmt.Errorf("eet2: private key: %w", err)
 				}
 				s, ok := k.(crypto.Signer)
 				if !ok {
-					return nil, errors.New("eet2: privátní klíč nelze použít k podpisu")
+					return nil, errors.New("eet2: the private key cannot sign")
 				}
 				key = s
 			}
 		}
 	}
 	if cert == nil {
-		return nil, errors.New("eet2: v PEM chybí blok CERTIFICATE")
+		return nil, errors.New("eet2: PEM has no CERTIFICATE block")
 	}
 	if key == nil {
-		return nil, errors.New("eet2: v PEM chybí privátní klíč")
+		return nil, errors.New("eet2: PEM has no private key")
 	}
 	return NewDispatcherWithSigner(service, cert, key, opts...)
 }
 
-// NewDispatcherWithSigner použije již načtený certifikát a klíč. Hodí se pro
-// klíče v HSM nebo cloudovém KMS, které implementují crypto.Signer.
+// NewDispatcherWithSigner uses an already loaded certificate and key. Useful
+// for keys in an HSM or cloud KMS that implement crypto.Signer.
 func NewDispatcherWithSigner(service Service, cert *x509.Certificate, key crypto.Signer, opts ...Option) (*Dispatcher, error) {
 	c, err := newCredentials(cert, key)
 	if err != nil {
@@ -198,17 +198,17 @@ func newDispatcher(service Service, c *credentials, opts []Option) (*Dispatcher,
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		tr.ForceAttemptHTTP2 = false
-		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{} // HTTP/1.1 je povinné
+		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{} // HTTP/1.1 is mandatory
 		d.client = &http.Client{Transport: tr}
 	}
 	return d, nil
 }
 
-// Certificate vrátí aktuální pokladní certifikát (např. pro kontrolu NotAfter).
+// Certificate returns the current cash register certificate (e.g. to check NotAfter).
 func (d *Dispatcher) Certificate() *x509.Certificate { return d.cred.Load().cert }
 
-// UpdateCertificate vymění pokladní certifikát za běhu. Probíhající odeslání
-// doběhnou se starým certifikátem, další už použijí nový.
+// UpdateCertificate swaps the certificate at runtime. Sends in progress
+// finish with the old certificate, later ones use the new one.
 func (d *Dispatcher) UpdateCertificate(cert *x509.Certificate, key crypto.Signer) error {
 	c, err := newCredentials(cert, key)
 	if err != nil {
@@ -218,8 +218,8 @@ func (d *Dispatcher) UpdateCertificate(cert *x509.Certificate, key crypto.Signer
 	return nil
 }
 
-// UpdateCertificateFromP12 vymění pokladní certifikát za běhu za certifikát
-// z obsahu souboru PKCS#12, např. nově stažený z DIS+.
+// UpdateCertificateFromP12 swaps the certificate at runtime for one from
+// PKCS#12 content, e.g. freshly downloaded from DIS+.
 func (d *Dispatcher) UpdateCertificateFromP12(p12 []byte, password string) error {
 	c, err := credentialsFromP12(p12, password)
 	if err != nil {
@@ -229,32 +229,32 @@ func (d *Dispatcher) UpdateCertificateFromP12(p12 []byte, password string) error
 	return nil
 }
 
-// BuildRequest sestaví a podepíše datovou zprávu bez odeslání. Vrací XML
-// a UUID zprávy. Hodí se pro ladění nebo vlastní transport.
+// BuildRequest builds and signs the data message without sending it.
+// It returns the XML and the message UUID. Useful for debugging or a
+// custom transport.
 func (d *Dispatcher) BuildRequest(r Receipt) (xml []byte, uuid string, err error) {
-	hlavicka, data, err := r.attrs(d.now())
+	header, data, err := r.attrs(d.now())
 	if err != nil {
 		return nil, "", err
 	}
 	c := d.cred.Load()
-	xml, err = buildEnvelope(hlavicka, data, c.cert, c.key)
+	xml, err = buildEnvelope(header, data, c.cert, c.key)
 	if err != nil {
 		return nil, "", err
 	}
-	return xml, hlavicka[0].value, nil
+	return xml, header[0].value, nil
 }
 
-// SendPayment odešle tržbu a vrátí odpověď s POK.
+// SendPayment sends the sale and returns the reply with the POK.
 //
-// Při chybě rozhodněte podle IsRetryable(err): pokud vrátí true, uložte
-// tržbu a odešlete ji znovu se stejnými daty a Opakovane: true
-// (nejpozději do 48 hodin).
+// On error, check IsRetryable(err): if true, store the sale and send it
+// again with the same data and Resend: true (within 48 hours at the latest).
 func (d *Dispatcher) SendPayment(r Receipt) (*Response, error) {
 	return d.SendPaymentContext(context.Background(), r)
 }
 
-// SendPaymentContext je SendPayment s kontextem. Mezní doba odezvy
-// (WithTimeout) platí vždy, i když má kontext delší deadline.
+// SendPaymentContext is SendPayment with a context. The response time
+// limit (WithTimeout) always applies, even if the context has a later deadline.
 func (d *Dispatcher) SendPaymentContext(ctx context.Context, r Receipt) (*Response, error) {
 	body, uuid, err := d.BuildRequest(r)
 	if err != nil {
@@ -272,16 +272,16 @@ func (d *Dispatcher) SendPaymentContext(ctx context.Context, r Receipt) (*Respon
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: odeslání: %w", err)
+		return nil, fmt.Errorf("eet2: sending: %w", err)
 	}
 	defer resp.Body.Close()
 	gtid := resp.Header.Get("X-Global-Transaction-Id")
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("eet2: čtení odpovědi: %w", err)
+		return nil, fmt.Errorf("eet2: reading response: %w", err)
 	}
 	if len(bytes.TrimSpace(respBody)) == 0 {
-		return nil, &UnexpectedResponseError{resp.StatusCode, "prázdná odpověď", gtid}
+		return nil, &UnexpectedResponseError{resp.StatusCode, "empty response", gtid}
 	}
 	return parseResponse(respBody, resp.StatusCode, uuid, gtid)
 }

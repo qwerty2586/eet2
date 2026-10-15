@@ -18,29 +18,29 @@ import (
 	"time"
 )
 
-// CAService je adresa API certifikační autority EET (CA EET v2),
-// přes které se automaticky obnovuje pokladní certifikát.
+// CAService is the address of the EET certificate authority API (CA EET v2),
+// used to renew the cash register certificate automatically.
 type CAService string
 
 const (
-	// CAProductionService je produkční CA EET. Dispatcher s ProductionService
-	// ji používá automaticky.
+	// CAProductionService is the production CA EET. A Dispatcher created
+	// with ProductionService uses it automatically.
 	CAProductionService CAService = "https://ca.caeet.gov.cz/api"
 
-	// CATestService je testovací prostředí CA EET.
+	// CATestService is the CA EET test environment.
 	CATestService CAService = "https://ca.test.caeet.gov.cz/api"
 
-	// CAZkusebniService je zkušební prostředí CA EET.
-	CAZkusebniService CAService = "https://ca.zkus.caeet.gov.cz/api"
+	// CATrialService is the CA EET trial environment ("zkušební prostředí").
+	CATrialService CAService = "https://ca.zkus.caeet.gov.cz/api"
 )
 
-// WithCAService nastaví API certifikační autority pro RenewCertificate.
-// Pro ProductionService se použije CAProductionService automaticky.
+// WithCAService sets the certificate authority API used by RenewCertificate.
+// CAProductionService is used automatically for ProductionService.
 func WithCAService(s CAService) Option {
 	return func(d *Dispatcher) { d.ca = s }
 }
 
-// Stavy žádosti o certifikát.
+// Certificate request states.
 const (
 	caStateInProcess  = "INPROCESS"
 	caStateIssued     = "ISSUED"
@@ -50,31 +50,31 @@ const (
 )
 
 const (
-	// caRequestTimeout omezuje jeden HTTP požadavek na CA (ne celé čekání).
+	// caRequestTimeout limits a single HTTP request to the CA (not the whole wait).
 	caRequestTimeout = 30 * time.Second
-	// caMaxPoll je nejdelší pauza mezi dotazy na stav žádosti.
+	// caMaxPoll is the longest pause between status checks.
 	caMaxPoll = 5 * time.Minute
-	// jwtLifetime je platnost tokenu; CA připouští nejvýše 5 minut od iat.
+	// jwtLifetime is the token lifetime; the CA allows at most 5 minutes from iat.
 	jwtLifetime = 4 * time.Minute
 )
 
-// pollUnit je jednotka pro pollAfterSeconds (v testech se zkracuje).
+// pollUnit is the unit of pollAfterSeconds (shortened in tests).
 var pollUnit = time.Second
 
-// CAError je chybová odpověď API certifikační autority.
+// CAError is an error reply from the certificate authority API.
 type CAError struct {
 	StatusCode     int
 	Code           int
 	Message        string
 	AdditionalInfo string
-	// RetryAfter je doporučená pauza před dalším pokusem (u HTTP 429).
+	// RetryAfter is the suggested pause before the next attempt (HTTP 429).
 	RetryAfter time.Duration
 }
 
 func (e *CAError) Error() string {
 	s := fmt.Sprintf("eet2: CA EET HTTP %d", e.StatusCode)
 	if e.Message != "" {
-		s += fmt.Sprintf(": %s (kód %d)", e.Message, e.Code)
+		s += fmt.Sprintf(": %s (code %d)", e.Message, e.Code)
 	}
 	if e.AdditionalInfo != "" {
 		s += ": " + e.AdditionalInfo
@@ -82,35 +82,36 @@ func (e *CAError) Error() string {
 	return s
 }
 
-// Temporary je true pro chyby, po kterých má smysl to zkusit později
-// (přetížení, chyba serveru).
+// Temporary is true for errors worth retrying later (rate limiting,
+// server errors).
 func (e *CAError) Temporary() bool {
 	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500
 }
 
-// RejectedError znamená, že CA žádost o obnovu zamítla.
+// RejectedError means the CA rejected the renewal request.
 type RejectedError struct {
 	ReqID  string
 	Reason string
 }
 
 func (e *RejectedError) Error() string {
-	return fmt.Sprintf("eet2: CA EET zamítla žádost %s: %s", e.ReqID, e.Reason)
+	return fmt.Sprintf("eet2: CA EET rejected request %s: %s", e.ReqID, e.Reason)
 }
 
-// Renewal je vydaný a stažený nový pokladní certifikát, jehož převzetí ještě
-// nebylo potvrzeno. Uložte P12 a Heslo a pak zavolejte Confirm.
+// Renewal is an issued and downloaded new certificate whose receipt has not
+// been confirmed yet. Store P12 and Password, then call Confirm.
 //
-// Dokud není převzetí potvrzeno, lze certifikát znovu stáhnout: další volání
-// RenewCertificate naváže na tutéž žádost (nejdéle 30 dní od vydání).
+// Until the receipt is confirmed, the certificate can be downloaded again:
+// the next RenewCertificate call picks up the same request (for up to 30 days
+// after issue).
 type Renewal struct {
-	// ReqID je identifikátor žádosti u CA EET.
+	// ReqID is the CA EET request identifier.
 	ReqID string
-	// P12 je nový certifikát s privátním klíčem ve formátu PKCS#12.
+	// P12 is the new certificate with its private key in PKCS#12 format.
 	P12 []byte
-	// Heslo otevírá P12.
-	Heslo string
-	// Certificate je nový certifikát (NotBefore, NotAfter, SerialNumber…).
+	// Password opens P12.
+	Password string
+	// Certificate is the new certificate (NotBefore, NotAfter, SerialNumber…).
 	Certificate *x509.Certificate
 
 	d         *Dispatcher
@@ -118,29 +119,30 @@ type Renewal struct {
 	confirmed bool
 }
 
-// String nevypisuje P12 ani heslo, aby se neocitly v logu.
+// String does not print P12 or the password, so they never end up in logs.
 func (r *Renewal) String() string {
 	return fmt.Sprintf("eet2.Renewal{ReqID: %s, Serial: %s, NotAfter: %s}",
 		r.ReqID, r.Certificate.SerialNumber, r.Certificate.NotAfter.Format(time.RFC3339))
 }
 
-// GoString nevypisuje P12 ani heslo ani při formátování %#v.
+// GoString hides P12 and the password for %#v as well.
 func (r *Renewal) GoString() string { return r.String() }
 
-// RenewCertificate obnoví pokladní certifikát přes API CA EET a vrátí nový
-// certifikát. Dispatcher zatím dál používá starý: na nový přepne až
-// Renewal.Confirm, které zavolejte po bezpečném uložení P12 a hesla.
+// RenewCertificate renews the cash register certificate through the CA EET
+// API and returns the new certificate. The Dispatcher keeps using the old
+// one: it switches only in Renewal.Confirm, which you call after storing P12
+// and Password safely.
 //
-// Pokud u CA existuje rozpracovaná žádost (např. po pádu aplikace před
-// Confirm), naváže na ni místo podání nové. Čeká na vydání certifikátu;
-// ctx určuje, jak dlouho. Žádost u CA běží dál i po zrušení ctx a příští
-// volání na ni naváže.
+// If the CA has an unfinished request (e.g. the application crashed before
+// Confirm), it is picked up instead of filing a new one. The call waits for
+// the certificate to be issued; ctx limits how long. The request keeps going
+// at the CA after ctx is cancelled and the next call picks it up.
 //
-// Obnovovat je nutné, dokud je stávající certifikát platný. Finanční správa
-// doporučuje 2–3 týdny před koncem platnosti.
+// Renew while the current certificate is still valid. The tax administration
+// recommends 2–3 weeks before it expires.
 func (d *Dispatcher) RenewCertificate(ctx context.Context) (*Renewal, error) {
 	if d.ca == "" {
-		return nil, errors.New("eet2: není nastaveno API certifikační autority, použijte WithCAService")
+		return nil, errors.New("eet2: no certificate authority API configured, use WithCAService")
 	}
 
 	reqID, state, err := d.findUnfinishedRequest(ctx)
@@ -155,7 +157,7 @@ func (d *Dispatcher) RenewCertificate(ctx context.Context) (*Renewal, error) {
 			return nil, err
 		}
 		if res.ReqID == "" {
-			return nil, errors.New("eet2: CA EET nevrátila reqId")
+			return nil, errors.New("eet2: CA EET returned no reqId")
 		}
 		reqID, state = res.ReqID, caStateInProcess
 	}
@@ -175,9 +177,9 @@ func (d *Dispatcher) RenewCertificate(ctx context.Context) (*Renewal, error) {
 		case caStateRejected:
 			return nil, &RejectedError{ReqID: reqID, Reason: st.RejectedReason}
 		case caStateFinished:
-			return nil, fmt.Errorf("eet2: žádost %s je už ukončená, certifikát byl převzat dříve", reqID)
+			return nil, fmt.Errorf("eet2: request %s is already finished, the certificate was taken earlier", reqID)
 		default:
-			return nil, fmt.Errorf("eet2: neznámý stav žádosti %s: %q", reqID, st.State)
+			return nil, fmt.Errorf("eet2: unknown state of request %s: %q", reqID, st.State)
 		}
 	}
 
@@ -190,24 +192,25 @@ func (d *Dispatcher) RenewCertificate(ctx context.Context) (*Renewal, error) {
 	}
 	p12, err := base64.StdEncoding.DecodeString(dto.Pkcs12)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: PKCS#12 od CA EET není platné Base64: %w", err)
+		return nil, fmt.Errorf("eet2: PKCS#12 from CA EET is not valid Base64: %w", err)
 	}
 	cred, err := credentialsFromP12(p12, dto.Password)
 	if err != nil {
-		return nil, fmt.Errorf("eet2: certifikát od CA EET nelze načíst (převzetí nebylo potvrzeno): %w", err)
+		return nil, fmt.Errorf("eet2: cannot load the certificate from CA EET (receipt not confirmed): %w", err)
 	}
 	if old := d.Certificate(); cred.cert.Subject.CommonName != old.Subject.CommonName {
-		return nil, fmt.Errorf("eet2: nový certifikát je vydán na %q, stávající na %q (převzetí nebylo potvrzeno)",
+		return nil, fmt.Errorf("eet2: the new certificate is issued to %q, the current one to %q (receipt not confirmed)",
 			cred.cert.Subject.CommonName, old.Subject.CommonName)
 	}
-	return &Renewal{ReqID: reqID, P12: p12, Heslo: dto.Password, Certificate: cred.cert, d: d, cred: cred}, nil
+	return &Renewal{ReqID: reqID, P12: p12, Password: dto.Password, Certificate: cred.cert, d: d, cred: cred}, nil
 }
 
-// Confirm potvrdí CA EET převzetí certifikátu a přepne Dispatcher na nový
-// certifikát. Volejte ho až po bezpečném uložení P12 a hesla: po potvrzení
-// už certifikát nelze znovu stáhnout.
+// Confirm confirms receipt of the certificate to CA EET and switches the
+// Dispatcher to the new certificate. Call it only after P12 and Password
+// are stored safely: once confirmed, the certificate cannot be downloaded
+// again.
 //
-// Opakované volání je bezpečné.
+// Calling it again is safe.
 func (r *Renewal) Confirm(ctx context.Context) error {
 	if r.confirmed {
 		return nil
@@ -217,11 +220,11 @@ func (r *Renewal) Confirm(ctx context.Context) error {
 
 	var ce *CAError
 	if errors.As(err, &ce) && ce.StatusCode == http.StatusUnauthorized && r.cred != r.d.cred.Load() {
-		// Starý certifikát mezitím mohl vypršet: zkusit se přihlásit novým.
+		// The old certificate may have expired meanwhile: sign in with the new one.
 		err = r.d.caCall(ctx, http.MethodPost, path, nil, nil, r.cred)
 	}
 	if errors.As(err, &ce) && ce.StatusCode == http.StatusConflict {
-		// Převzetí už mohlo být potvrzeno (např. odpověď se ztratila po cestě).
+		// The receipt may already be confirmed (e.g. the reply got lost).
 		if st, serr := r.d.caStatus(ctx, r.ReqID); serr == nil && st.State == caStateFinished {
 			err = nil
 		}
@@ -234,8 +237,8 @@ func (r *Renewal) Confirm(ctx context.Context) error {
 	return nil
 }
 
-// findUnfinishedRequest vrátí rozpracovanou žádost, pokud existuje.
-// Přednost má žádost s vydaným certifikátem.
+// findUnfinishedRequest returns an unfinished request if there is one,
+// preferring one whose certificate is already issued.
 func (d *Dispatcher) findUnfinishedRequest(ctx context.Context) (reqID, state string, err error) {
 	var list struct {
 		Data []string `json:"data"`
@@ -287,8 +290,8 @@ func (d *Dispatcher) caStatus(ctx context.Context, reqID string) (*caStatusResul
 	return &st, nil
 }
 
-// caCall provede jeden požadavek na API CA EET. cred určuje certifikát pro
-// JWT (nil = aktuální certifikát Dispatcheru). out může být nil.
+// caCall makes one request to the CA EET API. cred selects the certificate
+// for the JWT (nil = the Dispatcher's current certificate). out may be nil.
 func (d *Dispatcher) caCall(ctx context.Context, method, path string, in, out any, cred *credentials, hdr ...*http.Header) error {
 	if cred == nil {
 		cred = d.cred.Load()
@@ -323,7 +326,7 @@ func (d *Dispatcher) caCall(ctx context.Context, method, path string, in, out an
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("eet2: CA EET: čtení odpovědi: %w", err)
+		return fmt.Errorf("eet2: CA EET: reading response: %w", err)
 	}
 	if len(hdr) > 0 && hdr[0] != nil {
 		*hdr[0] = resp.Header
@@ -345,14 +348,14 @@ func (d *Dispatcher) caCall(ctx context.Context, method, path string, in, out an
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("eet2: CA EET: neplatná odpověď: %w", err)
+			return fmt.Errorf("eet2: CA EET: invalid response: %w", err)
 		}
 	}
 	return nil
 }
 
-// caToken vytvoří JWT (RS256) podepsaný pokladním certifikátem. Certifikát
-// se identifikuje otiskem x5t#S256 = base64url(SHA-256(DER)).
+// caToken creates a JWT (RS256) signed with the cash register certificate.
+// The certificate is identified by x5t#S256 = base64url(SHA-256(DER)).
 func caToken(c *credentials, now time.Time) (string, error) {
 	b64 := base64.RawURLEncoding
 	thumb := sha256.Sum256(c.cert.Raw)
@@ -367,7 +370,7 @@ func caToken(c *credentials, now time.Time) (string, error) {
 	h := sha256.Sum256([]byte(signingInput))
 	sig, err := c.key.Sign(rand.Reader, h[:], crypto.SHA256)
 	if err != nil {
-		return "", fmt.Errorf("eet2: podpis JWT: %w", err)
+		return "", fmt.Errorf("eet2: signing JWT: %w", err)
 	}
 	return signingInput + "." + b64.EncodeToString(sig), nil
 }

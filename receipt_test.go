@@ -51,62 +51,62 @@ func testReceipt() Receipt {
 func TestFormatAmount(t *testing.T) {
 	ok := map[string]string{
 		"0":            "0.00",
-		"-0":           "0.00", // žádné "-0.00"
+		"-0":           "0.00", // never "-0.00"
 		"0.00":         "0.00",
 		"250":          "250.00",
 		"81.6":         "81.60",
 		"81.60":        "81.60",
-		"81.600":       "81.60", // nuly navíc nevadí
+		"81.600":       "81.60", // trailing zeros are fine
 		"0.56":         "0.56",
 		"-187.2":       "-187.20",
 		"-0.01":        "-0.01",
 		"20.45":        "20.45",
-		"0020.45":      "20.45", // žádné vedoucí nuly
+		"0020.45":      "20.45", // no leading zeros
 		"99999999.99":  "99999999.99",
 		"-99999999.99": "-99999999.99",
 	}
 	for in, want := range ok {
 		got, err := formatAmount(decimal.RequireFromString(in))
 		if err != nil || got != want {
-			t.Errorf("formatAmount(%s) = %q, %v; chci %q", in, got, err, want)
+			t.Errorf("formatAmount(%s) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{"100000000", "-100000000", "1e300", "1.005", "12.345", "-0.001", "0.1234"} {
 		if got, err := formatAmount(decimal.RequireFromString(in)); err == nil {
-			t.Errorf("formatAmount(%s) = %q, měl vrátit chybu", in, got)
+			t.Errorf("formatAmount(%s) = %q, want an error", in, got)
 		}
 	}
 }
 
-// Postup z README: zaokrouhlení výpočtu před odesláním.
-func TestReadmeRounding(t *testing.T) {
-	cena := decimal.RequireFromString("10.15")
-	sDph := cena.Mul(decimal.RequireFromString("1.21")) // 12.2815
-	if _, err := formatAmount(sDph); err == nil {
-		t.Fatal("nezaokrouhlená částka měla být odmítnuta")
+// The rounding recipe from docs/amounts.md.
+func TestDocsRounding(t *testing.T) {
+	price := decimal.RequireFromString("10.15")
+	withVAT := price.Mul(decimal.RequireFromString("1.21")) // 12.2815
+	if _, err := formatAmount(withVAT); err == nil {
+		t.Fatal("an unrounded amount should be rejected")
 	}
 	cases := []struct {
 		name string
 		got  decimal.Decimal
 		want string
 	}{
-		{"Round(2)", sDph.Round(2), "12.28"},
-		{"Round(2) půlka", decimal.RequireFromString("12.345").Round(2), "12.35"},
-		{"Round(2) záporná půlka", decimal.RequireFromString("-12.345").Round(2), "-12.35"},
+		{"Round(2)", withVAT.Round(2), "12.28"},
+		{"Round(2) half", decimal.RequireFromString("12.345").Round(2), "12.35"},
+		{"Round(2) negative half", decimal.RequireFromString("-12.345").Round(2), "-12.35"},
 		{"RoundBank(2)", decimal.RequireFromString("12.345").RoundBank(2), "12.34"},
-		{"Round(0) hotovost", decimal.RequireFromString("81.60").Round(0), "82.00"},
-		{"RoundFloor(0) hotovost dolů", decimal.RequireFromString("24.80").RoundFloor(0), "24.00"},
+		{"Round(0) cash", decimal.RequireFromString("81.60").Round(0), "82.00"},
+		{"RoundFloor(0) cash down", decimal.RequireFromString("24.80").RoundFloor(0), "24.00"},
 		{"NewFromFloat", decimal.NewFromFloat(1.005).Round(2), "1.01"},
-		{"Round(0) celkem", sDph.Round(2).Round(0), "12.00"},
+		{"Round(0) total", withVAT.Round(2).Round(0), "12.00"},
 		{"RoundCeil(0)", decimal.RequireFromString("24.20").RoundCeil(0), "25.00"},
-		{"RoundFloor(0) záporná", decimal.RequireFromString("-24.80").RoundFloor(0), "-25.00"},
-		{"haléře", decimal.New(25050, -2), "250.50"},
-		{"celé koruny", decimal.NewFromInt(250), "250.00"},
+		{"RoundFloor(0) negative", decimal.RequireFromString("-24.80").RoundFloor(0), "-25.00"},
+		{"hellers", decimal.New(25050, -2), "250.50"},
+		{"whole crowns", decimal.NewFromInt(250), "250.00"},
 	}
 	for _, c := range cases {
 		got, err := formatAmount(c.got)
 		if err != nil || got != c.want {
-			t.Errorf("%s: %q, %v; chci %q", c.name, got, err, c.want)
+			t.Errorf("%s: %q, %v; want %q", c.name, got, err, c.want)
 		}
 	}
 }
@@ -114,11 +114,11 @@ func TestReadmeRounding(t *testing.T) {
 func TestFormatTime(t *testing.T) {
 	winter := time.Date(2027, 1, 9, 3, 25, 28, 0, time.UTC)
 	if got := formatTime(winter); got != "2027-01-09T04:25:28+01:00" {
-		t.Errorf("zimní čas: %s", got)
+		t.Errorf("winter time: %s", got)
 	}
 	summer := time.Date(2027, 6, 9, 3, 25, 28, 0, time.UTC)
 	if got := formatTime(summer); got != "2027-06-09T05:25:28+02:00" {
-		t.Errorf("letní čas: %s", got)
+		t.Errorf("summer time: %s", got)
 	}
 }
 
@@ -127,10 +127,10 @@ func TestNewUUID(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		u := NewUUID()
 		if !reUUID.MatchString(u) || u[14] != '4' {
-			t.Fatalf("neplatné UUID v4: %s", u)
+			t.Fatalf("invalid v4 UUID: %s", u)
 		}
 		if seen[u] {
-			t.Fatal("duplicitní UUID")
+			t.Fatal("duplicate UUID")
 		}
 		seen[u] = true
 	}
@@ -138,7 +138,7 @@ func TestNewUUID(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	if err := testReceipt().Validate(); err != nil {
-		t.Fatalf("platná tržba: %v", err)
+		t.Fatalf("valid sale: %v", err)
 	}
 	bad := map[string]func(*Receipt){
 		"eic_popl":         func(r *Receipt) { r.EicPopl = "12345678" },
@@ -156,7 +156,7 @@ func TestValidate(t *testing.T) {
 		mutate(&r)
 		var ve *ValidationError
 		if err := r.Validate(); !errors.As(err, &ve) || ve.Field != field {
-			t.Errorf("%s: chci ValidationError pro %s, mám %v", field, field, err)
+			t.Errorf("%s: want ValidationError for %s, got %v", field, field, err)
 		}
 	}
 }
@@ -164,7 +164,7 @@ func TestValidate(t *testing.T) {
 func TestAttrsOptionalFields(t *testing.T) {
 	r := testReceipt()
 	r.UuidZpravy = "e23e5a5a-08d7-4a08-844d-2b6c6b60621d"
-	r.Opakovane = true
+	r.Resend = true
 	r.Overeni = true
 	r.EicPoverujiciho = "CZ8551015704"
 	r.PovereniVicePopl = true
@@ -178,20 +178,20 @@ func TestAttrsOptionalFields(t *testing.T) {
 	wantH := `<v4:Hlavicka dat_odesl="2027-01-08T21:19:40+01:00" overeni="true" prvni_zaslani="false" ` +
 		`uuid_zpravy="e23e5a5a-08d7-4a08-844d-2b6c6b60621d"></v4:Hlavicka>`
 	if gotH != wantH {
-		t.Errorf("Hlavicka:\n%s\nchci\n%s", gotH, wantH)
+		t.Errorf("Hlavicka:\n%s\nwant\n%s", gotH, wantH)
 	}
 	gotD := element("v4:Data", d)
 	wantD := `<v4:Data celk_trzba="250.00" cerp_zuct="237.00" dat_trzby="2027-01-08T21:19:38+01:00" ` +
 		`eic_popl="CZ00000019" eic_poverujiciho="CZ8551015704" id_jednotky="181" id_pokl="RECEPCE" ` +
 		`porad_cis="2027/000123" povereni_vice_popl="true" urceno_cerp_zuct="343.00"></v4:Data>`
 	if gotD != wantD {
-		t.Errorf("Data:\n%s\nchci\n%s", gotD, wantD)
+		t.Errorf("Data:\n%s\nwant\n%s", gotD, wantD)
 	}
 
-	// Nepovinné položky se bez hodnoty vůbec neuvádějí.
+	// Optional fields without a value are omitted entirely.
 	h, d, _ = testReceipt().attrs(time.Now())
 	if len(h) != 3 || len(d) != 6 {
-		t.Errorf("minimální tržba má mít 3 atributy hlavičky a 6 dat, má %d a %d", len(h), len(d))
+		t.Errorf("a minimal sale has 3 header and 6 data attributes, got %d and %d", len(h), len(d))
 	}
 }
 
@@ -201,6 +201,6 @@ func TestUniqueKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := "CZ00000019|181|RECEPCE|2027/000123|2027-01-08T21:19:38+01:00|250.00"; k != want {
-		t.Fatalf("%s, chci %s", k, want)
+		t.Fatalf("%s, want %s", k, want)
 	}
 }

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// officialSample načte vzorovou zprávu finanční správy
+// officialSample loads the tax administration's sample message
 // (https://eet.gov.cz/assets/cs/cmsmedia/pro-vyvojare/CZ00000019.eet.v4.req.xml).
 func officialSample(t *testing.T) string {
 	t.Helper()
@@ -29,12 +29,12 @@ func extract(t *testing.T, s, pattern string) string {
 	t.Helper()
 	m := regexp.MustCompile(pattern).FindStringSubmatch(s)
 	if m == nil {
-		t.Fatalf("vzor %q nenalezen", pattern)
+		t.Fatalf("pattern %q not found", pattern)
 	}
 	return m[1]
 }
 
-// Atributy Hlavicka a Data ze vzorové zprávy, přesně jak jsou v ní uvedeny.
+// Hlavicka and Data attributes from the sample message, exactly as they appear in it.
 var sampleHlavicka = []attr{
 	{"uuid_zpravy", "03965780-6457-4842-bd80-5f9195c0b8c8"},
 	{"dat_odesl", "2026-07-01T09:02:18Z"},
@@ -53,7 +53,7 @@ var sampleData = []attr{
 	{"cerp_zuct", "302.00"},
 }
 
-// Kanonizace Body musí dát přesně DigestValue z oficiální vzorové zprávy.
+// Canonicalizing Body must give exactly the DigestValue of the official sample message.
 func TestCanonicalBodyMatchesOfficialDigest(t *testing.T) {
 	s := officialSample(t)
 	bodyID := extract(t, s, `<soapenv:Body wsu:Id="([^"]+)"`)
@@ -61,12 +61,12 @@ func TestCanonicalBodyMatchesOfficialDigest(t *testing.T) {
 
 	got := b64sha256(canonicalBody(bodyID, trzbaXML(sampleHlavicka, sampleData)))
 	if got != want {
-		t.Fatalf("DigestValue = %s, oficiální vzor má %s", got, want)
+		t.Fatalf("DigestValue = %s, the official sample has %s", got, want)
 	}
 }
 
-// Kanonický SignedInfo musí odpovídat podpisu z oficiální vzorové zprávy,
-// ověřenému veřejným klíčem certifikátu, který je v ní přiložen.
+// The canonical SignedInfo must match the signature in the official sample
+// message, verified with the public key of the certificate attached to it.
 func TestCanonicalSignedInfoMatchesOfficialSignature(t *testing.T) {
 	s := officialSample(t)
 	bodyID := extract(t, s, `<soapenv:Body wsu:Id="([^"]+)"`)
@@ -88,12 +88,12 @@ func TestCanonicalSignedInfoMatchesOfficialSignature(t *testing.T) {
 	}
 	h := sha256.Sum256([]byte(canonicalSignedInfo(bodyID, digest)))
 	if err := rsa.VerifyPKCS1v15(cert.PublicKey.(*rsa.PublicKey), crypto.SHA256, h[:], sig); err != nil {
-		t.Fatalf("podpis oficiální zprávy nesedí na náš kanonický SignedInfo: %v", err)
+		t.Fatalf("the official signature does not match our canonical SignedInfo: %v", err)
 	}
 }
 
-// Vytvořená zpráva musí být well-formed XML, obsahovat certifikát a mít
-// platný podpis nad kanonickým SignedInfo s digestem kanonického Body.
+// The built message must be well-formed XML, contain the certificate and have
+// a valid signature over the canonical SignedInfo with the canonical Body digest.
 func TestBuildEnvelopeSelfConsistent(t *testing.T) {
 	cert, key := testCert(t, "CZ00000019")
 	r := testReceipt()
@@ -108,14 +108,14 @@ func TestBuildEnvelopeSelfConsistent(t *testing.T) {
 	s := string(out)
 
 	if err := xml.Unmarshal(out, new(struct{})); err != nil {
-		t.Fatalf("výstup není well-formed XML: %v", err)
+		t.Fatalf("output is not well-formed XML: %v", err)
 	}
 	if len(out) > maxMessageSize {
-		t.Fatalf("zpráva má %d B, limit je %d B", len(out), maxMessageSize)
+		t.Fatalf("message is %d B, the limit is %d B", len(out), maxMessageSize)
 	}
 	for _, forbidden := range []string{"Timestamp", "wsa:", "\n"} {
 		if strings.Contains(s, forbidden) {
-			t.Errorf("zpráva nemá obsahovat %q", forbidden)
+			t.Errorf("message must not contain %q", forbidden)
 		}
 	}
 
@@ -123,31 +123,31 @@ func TestBuildEnvelopeSelfConsistent(t *testing.T) {
 	trzba := extract(t, s, `(<v4:Trzba>.*</v4:Trzba>)`)
 	digest := extract(t, s, `<ds:DigestValue>([^<]+)</ds:DigestValue>`)
 	if want := b64sha256(canonicalBody(bodyID, trzba)); digest != want {
-		t.Fatalf("DigestValue %s, očekáváno %s", digest, want)
+		t.Fatalf("DigestValue %s, want %s", digest, want)
 	}
 	if ref := extract(t, s, `<ds:Reference URI="#([^"]+)">`); ref != bodyID {
-		t.Fatalf("Reference URI #%s neukazuje na Body %s", ref, bodyID)
+		t.Fatalf("Reference URI #%s does not point to Body %s", ref, bodyID)
 	}
 
 	sig, _ := base64.StdEncoding.DecodeString(extract(t, s, `<ds:SignatureValue>([^<]+)</ds:SignatureValue>`))
 	hs := sha256.Sum256([]byte(canonicalSignedInfo(bodyID, digest)))
 	if err := rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, hs[:], sig); err != nil {
-		t.Fatalf("podpis nesedí: %v", err)
+		t.Fatalf("signature does not verify: %v", err)
 	}
 
 	certDER, _ := base64.StdEncoding.DecodeString(extract(t, s, `<wsse:BinarySecurityToken[^>]*>([^<]+)<`))
 	if string(certDER) != string(cert.Raw) {
-		t.Fatal("BinarySecurityToken neobsahuje pokladní certifikát")
+		t.Fatal("BinarySecurityToken does not contain the certificate")
 	}
 	tokenID := extract(t, s, `<wsse:BinarySecurityToken[^>]* wsu:Id="([^"]+)"`)
 	if ref := extract(t, s, `<wsse:Reference URI="#([^"]+)"`); ref != tokenID {
-		t.Fatalf("KeyInfo odkazuje na #%s, token má Id %s", ref, tokenID)
+		t.Fatalf("KeyInfo points to #%s, the token has Id %s", ref, tokenID)
 	}
 
 	wantData := `<v4:Data celk_trzba="250.00" dat_trzby="2027-01-08T21:19:38+01:00" eic_popl="CZ00000019" ` +
 		`id_jednotky="181" id_pokl="RECEPCE" porad_cis="2027/000123"></v4:Data>`
 	if !strings.Contains(s, wantData) {
-		t.Fatalf("element Data neodpovídá:\n%s", trzba)
+		t.Fatalf("Data element does not match:\n%s", trzba)
 	}
 }
 

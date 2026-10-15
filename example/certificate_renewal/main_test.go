@@ -33,35 +33,36 @@ func newP12(t *testing.T, pass string) ([]byte, *x509.Certificate) {
 }
 
 func TestSaveAndResume(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "nova.p12")
+	out := filepath.Join(t.TempDir(), "new.p12")
 	p12, cert := newP12(t, "ABcd1234")
-	ren := &eet2.Renewal{P12: p12, Heslo: "ABcd1234", Certificate: cert}
+	ren := &eet2.Renewal{P12: p12, Password: "ABcd1234", Certificate: cert}
 
 	if ok, err := alreadySaved(out, ren); ok || err != nil {
-		t.Fatalf("prázdný adresář: %v %v", ok, err)
+		t.Fatalf("empty directory: %v %v", ok, err)
 	}
-	if err := save(out+".heslo", []byte(ren.Heslo+"\n")); err != nil {
+	if err := save(out+".password", []byte(ren.Password+"\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := save(out, ren.P12); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(out); fi.Mode().Perm() != 0o600 {
-		t.Fatalf("práva %v, chci 0600", fi.Mode().Perm())
+		t.Fatalf("permissions %v, want 0600", fi.Mode().Perm())
 	}
 	if ok, err := alreadySaved(out, ren); !ok || err != nil {
-		t.Fatalf("uložený certifikát nerozpoznán: %v %v", ok, err)
+		t.Fatalf("stored certificate not recognised: %v %v", ok, err)
 	}
 
-	// Po přerušení vrátí CA tentýž certifikát v jinak zašifrovaném souboru.
-	ren2 := &eet2.Renewal{P12: []byte("jiný obsah"), Heslo: "Zz998877", Certificate: cert}
+	// After an interruption the CA returns the same certificate in a
+	// differently encrypted file.
+	ren2 := &eet2.Renewal{P12: []byte("other content"), Password: "Zz998877", Certificate: cert}
 	if ok, err := alreadySaved(out, ren2); !ok || err != nil {
-		t.Fatalf("tentýž certifikát má projít i s jiným souborem: %v %v", ok, err)
+		t.Fatalf("the same certificate must pass even with a different file: %v %v", ok, err)
 	}
 
-	// Jiný certifikát se nikdy nepřepíše.
+	// A different certificate is never overwritten.
 	_, other := newP12(t, "x")
 	if ok, err := alreadySaved(out, &eet2.Renewal{Certificate: other}); ok || err == nil {
-		t.Fatal("soubor s jiným certifikátem se nemá považovat za uložený")
+		t.Fatal("a file with a different certificate must not count as stored")
 	}
 }

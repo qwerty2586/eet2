@@ -1,18 +1,22 @@
-// Package eet2 je klient pro českou elektronickou evidenci tržeb EET 2.0
-// (zákon č. 180/2026 Sb., rozhraní EET verze 4).
+// Package eet2 is a client for the Czech electronic sales registration
+// EET 2.0 (Act No. 180/2026 Coll., EET interface version 4).
 //
-// Balíček sestaví datovou zprávu o evidované tržbě, podepíše ji pokladním
-// certifikátem podle WS-Security (Exclusive C14N, SHA-256, RSA-SHA256),
-// odešle ji synchronně na společné technické zařízení správce daně
-// a vrátí potvrzovací kód (POK) nebo chybu.
+// The package builds the sale data message, signs it with the cash register
+// certificate per WS-Security (Exclusive C14N, SHA-256, RSA-SHA256), sends it
+// synchronously to the tax administration and returns the confirmation code
+// (POK) or an error. It can also renew the certificate through the CA EET API.
 //
-// Částky jsou decimal.Decimal (github.com/shopspring/decimal) a smí mít
-// nejvýše dvě desetinná místa. Zaokrouhlení je na aplikaci, aby evidovaná
-// částka odpovídala dokladu.
+// Fields that map to EET message attributes keep their Czech names
+// (EicPopl, PoradCis, CelkTrzba, Pok, …) so they match the official
+// specification.
 //
-// Základní použití:
+// Amounts are decimal.Decimal (github.com/shopspring/decimal) with at most
+// two decimal places. Rounding is up to the application so that the
+// registered amount matches the receipt.
 //
-//	d, err := eet2.NewDispatcherFromP12(eet2.PlaygroundService, p12Bytes, "heslo")
+// Basic usage:
+//
+//	d, err := eet2.NewDispatcherFromP12(eet2.PlaygroundService, p12Bytes, "password")
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -26,11 +30,11 @@
 //	})
 //	if err != nil {
 //		if eet2.IsRetryable(err) {
-//			// uložit do fronty a odeslat znovu s Opakovane: true
+//			// queue the sale and send it again with Resend: true
 //		}
 //		log.Fatal(err)
 //	}
 //	fmt.Println("POK:", resp.Pok)
 //
-// Specifikace rozhraní: https://eet.gov.cz/cs/pro-vyvojare
+// Interface specification: https://eet.gov.cz/cs/pro-vyvojare
 package eet2

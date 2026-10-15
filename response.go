@@ -10,44 +10,46 @@ import (
 	"time"
 )
 
-// Response je úspěšná odpověď systému EET.
+// Response is a successful reply from EET.
 type Response struct {
-	// UuidZpravy je UUID odeslané datové zprávy.
+	// UuidZpravy is the UUID of the sent message (uuid_zpravy).
 	UuidZpravy string
 
-	// DatPrij je okamžik přijetí zprávy serverem.
+	// DatPrij is when the server received the message (dat_prij).
 	DatPrij time.Time
 
-	// Pok je potvrzovací kód (39 znaků). V ověřovacím módu je prázdný.
-	// V neprodukčním prostředí končí na "-ff" a není platný.
+	// Pok is the confirmation code (pok, 39 characters). Empty in
+	// verification mode. In the non-production environment it ends with
+	// "-ff" and is not valid.
 	Pok string
 
-	// Test je true, pokud odpověď přišla z neprodukčního prostředí (playground).
+	// Test is true if the reply came from the non-production environment
+	// (playground).
 	Test bool
 
-	// Overeno je true, pokud šlo o ověřovací mód a zpráva prošla kontrolami
-	// (server vrátil chybu s kódem 0). Tržba v tom případě NENÍ zaevidována.
-	Overeno bool
+	// Verified is true in verification mode when the message passed all
+	// checks (the server returned error code 0). The sale is NOT registered.
+	Verified bool
 
-	// Varovani jsou propustné chyby. POK je platný i s varováním,
-	// ale data stojí za opravu.
-	Varovani []Varovani
+	// Warnings are non-critical errors. The POK is valid even with warnings,
+	// but the data is worth fixing.
+	Warnings []Warning
 
-	// GlobalTransactionID je hodnota hlavičky X-Global-Transaction-Id
-	// pro dohledání problémů s podporou finanční správy.
+	// GlobalTransactionID is the X-Global-Transaction-Id header, useful when
+	// tracking down problems with the tax administration's support.
 	GlobalTransactionID string
 }
 
-// Varovani je propustná chyba z odpovědi.
-type Varovani struct {
-	Kod  int
+// Warning is a non-critical error (varovani) from the reply.
+type Warning struct {
+	Code int
 	Text string
 }
 
-// Error je chybová odpověď systému EET (kritická chyba nebo dočasná
-// technická chyba na straně správce daně).
+// Error is an error reply from EET: a critical error in the message or a
+// temporary technical failure on the server side.
 type Error struct {
-	Kod                 int
+	Code                int
 	Text                string
 	Test                bool
 	UuidZpravy          string
@@ -56,28 +58,28 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("eet2: chyba EET %d: %s", e.Kod, e.Text)
+	return fmt.Sprintf("eet2: EET error %d: %s", e.Code, e.Text)
 }
 
-// Temporary je true pro dočasnou technickou chybu serveru (záporný kód).
-// Zprávu je pak třeba odeslat znovu později.
-func (e *Error) Temporary() bool { return e.Kod < 0 }
+// Temporary is true for a temporary technical failure on the server
+// (negative code). The message must be sent again later.
+func (e *Error) Temporary() bool { return e.Code < 0 }
 
-// Kódy chyb podle specifikace, kap. 3.5.4.
+// Error codes per the specification, ch. 3.5.4.
 const (
-	ErrKodDocasnaChyba   = -1 // dočasná technická chyba, odeslat později
-	ErrKodOvereniOK      = 0  // ověřovací mód: zprávu se podařilo zpracovat
-	ErrKodKodovani       = 2  // kódování XML není platné
-	ErrKodSchema         = 3  // zpráva nevyhověla XML schématu
-	ErrKodPodpis         = 4  // neplatný podpis SOAP zprávy
-	ErrKodEIC            = 6  // EIČ poplatníka má chybnou strukturu
-	ErrKodVelikost       = 7  // zpráva je příliš velká
-	ErrKodTechnickaChyba = 8  // technická chyba nebo chyba dat
+	ErrCodeTemporary  = -1 // temporary technical failure, send again later
+	ErrCodeVerifiedOK = 0  // verification mode: message processed successfully
+	ErrCodeEncoding   = 2  // invalid XML encoding
+	ErrCodeSchema     = 3  // message failed XML schema validation
+	ErrCodeSignature  = 4  // invalid SOAP message signature
+	ErrCodeEIC        = 6  // malformed taxpayer EIČ
+	ErrCodeTooLarge   = 7  // message too large
+	ErrCodeProcessing = 8  // technical or data error
 )
 
-// IsRetryable vrátí true, pokud má smysl tutéž tržbu odeslat znovu
-// (s Opakovane: true): výpadek spojení, timeout nebo dočasná chyba serveru.
-// Pro chyby validace a kritické chyby zprávy vrací false.
+// IsRetryable reports whether the same sale should be sent again
+// (with Resend: true): a connection failure, timeout or temporary server
+// error. It returns false for validation errors and critical message errors.
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
@@ -98,12 +100,12 @@ func IsRetryable(err error) bool {
 	if errors.As(err, &ne) {
 		return true
 	}
-	// Ostatní chyby přenosu (zrušené spojení apod.) bereme jako dočasné.
+	// Other transport errors (dropped connection etc.) are treated as temporary.
 	return true
 }
 
-// UnexpectedResponseError vznikne, když server vrátí odpověď, kterou nelze
-// zpracovat (jiný HTTP stav, SOAP Fault, neúplné XML).
+// UnexpectedResponseError means the server returned a reply that cannot be
+// processed (unexpected HTTP status, SOAP Fault, incomplete XML).
 type UnexpectedResponseError struct {
 	StatusCode          int
 	Msg                 string
@@ -112,9 +114,9 @@ type UnexpectedResponseError struct {
 
 func (e *UnexpectedResponseError) Error() string {
 	if e.StatusCode != 0 {
-		return fmt.Sprintf("eet2: neočekávaná odpověď (HTTP %d): %s", e.StatusCode, e.Msg)
+		return fmt.Sprintf("eet2: unexpected response (HTTP %d): %s", e.StatusCode, e.Msg)
 	}
-	return "eet2: neočekávaná odpověď: " + e.Msg
+	return "eet2: unexpected response: " + e.Msg
 }
 
 type xmlEnvelope struct {
@@ -155,43 +157,43 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-// parseResponse zpracuje tělo HTTP odpovědi. sentUUID je UUID odeslané
-// zprávy a slouží ke kontrole, že odpověď patří k ní.
+// parseResponse processes the HTTP response body. sentUUID is the UUID of
+// the sent message, used to check that the reply belongs to it.
 func parseResponse(body []byte, status int, sentUUID, gtid string) (*Response, error) {
 	var env xmlEnvelope
 	if err := xml.Unmarshal(body, &env); err != nil {
-		return nil, &UnexpectedResponseError{status, "nelze přečíst XML: " + err.Error(), gtid}
+		return nil, &UnexpectedResponseError{status, "cannot parse XML: " + err.Error(), gtid}
 	}
 	if f := env.Body.Fault; f != nil {
 		return nil, &UnexpectedResponseError{status, "SOAP Fault " + f.Code + ": " + strings.TrimSpace(f.String), gtid}
 	}
 	o := env.Body.Odpoved
 	if o == nil {
-		return nil, &UnexpectedResponseError{status, "odpověď neobsahuje element Odpoved", gtid}
+		return nil, &UnexpectedResponseError{status, "response has no Odpoved element", gtid}
 	}
 
-	var warnings []Varovani
+	var warnings []Warning
 	for _, v := range o.Varovani {
 		k, _ := strconv.Atoi(strings.TrimSpace(v.Kod))
-		warnings = append(warnings, Varovani{Kod: k, Text: strings.TrimSpace(v.Text)})
+		warnings = append(warnings, Warning{Code: k, Text: strings.TrimSpace(v.Text)})
 	}
 
 	if c := o.Chyba; c != nil {
-		kod, err := strconv.Atoi(strings.TrimSpace(c.Kod))
+		code, err := strconv.Atoi(strings.TrimSpace(c.Kod))
 		if err != nil {
-			return nil, &UnexpectedResponseError{status, "neplatný kód chyby " + strconv.Quote(c.Kod), gtid}
+			return nil, &UnexpectedResponseError{status, "invalid error code " + strconv.Quote(c.Kod), gtid}
 		}
-		if kod == ErrKodOvereniOK {
+		if code == ErrCodeVerifiedOK {
 			return &Response{
 				UuidZpravy:          sentUUID,
 				Test:                parseBool(c.Test),
-				Overeno:             true,
-				Varovani:            warnings,
+				Verified:            true,
+				Warnings:            warnings,
 				GlobalTransactionID: gtid,
 			}, nil
 		}
 		return nil, &Error{
-			Kod:                 kod,
+			Code:                code,
 			Text:                strings.TrimSpace(c.Text),
 			Test:                parseBool(c.Test),
 			UuidZpravy:          o.Hlavicka.UuidZpravy,
@@ -202,21 +204,21 @@ func parseResponse(body []byte, status int, sentUUID, gtid string) (*Response, e
 
 	p := o.Potvrzeni
 	if p == nil {
-		return nil, &UnexpectedResponseError{status, "odpověď neobsahuje potvrzení ani chybu", gtid}
+		return nil, &UnexpectedResponseError{status, "response has neither confirmation nor error", gtid}
 	}
 	if !rePOK.MatchString(p.Pok) {
-		return nil, &UnexpectedResponseError{status, "neplatný formát POK " + strconv.Quote(p.Pok), gtid}
+		return nil, &UnexpectedResponseError{status, "invalid POK format " + strconv.Quote(p.Pok), gtid}
 	}
 	if !strings.EqualFold(o.Hlavicka.UuidZpravy, sentUUID) {
-		return nil, &UnexpectedResponseError{status, "UUID v odpovědi " + strconv.Quote(o.Hlavicka.UuidZpravy) +
-			" neodpovídá odeslané zprávě " + strconv.Quote(sentUUID), gtid}
+		return nil, &UnexpectedResponseError{status, "response UUID " + strconv.Quote(o.Hlavicka.UuidZpravy) +
+			" does not match the sent message " + strconv.Quote(sentUUID), gtid}
 	}
 	return &Response{
 		UuidZpravy:          o.Hlavicka.UuidZpravy,
 		DatPrij:             parseTime(o.Hlavicka.DatPrij),
 		Pok:                 p.Pok,
 		Test:                parseBool(p.Test),
-		Varovani:            warnings,
+		Warnings:            warnings,
 		GlobalTransactionID: gtid,
 	}, nil
 }

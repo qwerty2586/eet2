@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Jmenné prostory a algoritmy podle technické specifikace EET 2.0, kap. 5.
+// Namespaces and algorithms per the EET 2.0 technical specification, ch. 5.
 const (
 	nsSoap = "http://schemas.xmlsoap.org/soap/envelope/"
 	nsEET  = "http://fs.gov.cz/eet/schema/v4"
@@ -27,15 +27,15 @@ const (
 	encBase64 = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
 	valX509v3 = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3"
 
-	// SOAPAction podle EETServiceSOAP.wsdl.
+	// SOAPAction from EETServiceSOAP.wsdl.
 	soapAction = "http://fs.gov.cz/eet/OdeslaniTrzby"
 
-	// Limit velikosti celé zprávy včetně SOAP obálky (kritická kontrola č. 5).
+	// Size limit of the whole message including the SOAP envelope (critical check no. 5).
 	maxMessageSize = 12 * 1024
 )
 
-// escapeAttr escapuje hodnotu atributu podle pravidel kanonizace XML.
-// Validace sice tyto znaky nepouští, ale jistota je jistota.
+// escapeAttr escapes an attribute value per the XML canonicalization rules.
+// Validation never lets these characters through, but better safe than sorry.
 func escapeAttr(s string) string {
 	if !strings.ContainsAny(s, "&<\"\t\n\r") {
 		return s
@@ -45,8 +45,8 @@ func escapeAttr(s string) string {
 	return r.Replace(s)
 }
 
-// element vrátí prázdný element s atributy seřazenými podle jména,
-// v kanonickém tvaru (explicitní koncová značka).
+// element returns an empty element with attributes sorted by name, in
+// canonical form (explicit end tag).
 func element(name string, attrs []attr) string {
 	sorted := append([]attr(nil), attrs...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
@@ -59,25 +59,26 @@ func element(name string, attrs []attr) string {
 	return b.String()
 }
 
-// trzbaXML vrátí element v4:Trzba (shodný v dokumentu i v kanonickém tvaru).
-func trzbaXML(hlavicka, data []attr) string {
-	return "<v4:Trzba>" + element("v4:Hlavicka", hlavicka) + element("v4:Data", data) + "</v4:Trzba>"
+// trzbaXML returns the v4:Trzba element (identical in the document and in
+// canonical form).
+func trzbaXML(header, data []attr) string {
+	return "<v4:Trzba>" + element("v4:Hlavicka", header) + element("v4:Data", data) + "</v4:Trzba>"
 }
 
-// canonicalBody vrátí soapenv:Body po kanonizaci Exclusive C14N
-// s InclusiveNamespaces PrefixList="v4". Z tohoto tvaru se počítá DigestValue.
+// canonicalBody returns soapenv:Body after Exclusive C14N with
+// InclusiveNamespaces PrefixList="v4". DigestValue is computed from it.
 func canonicalBody(bodyID, trzba string) string {
 	return `<soapenv:Body xmlns:soapenv="` + nsSoap + `" xmlns:v4="` + nsEET + `" xmlns:wsu="` + nsWsu +
 		`" wsu:Id="` + bodyID + `">` + trzba + `</soapenv:Body>`
 }
 
-// documentBody vrátí soapenv:Body tak, jak se vloží do obálky
-// (soapenv a v4 jsou deklarovány na Envelope).
+// documentBody returns soapenv:Body as it goes into the envelope
+// (soapenv and v4 are declared on Envelope).
 func documentBody(bodyID, trzba string) string {
 	return `<soapenv:Body xmlns:wsu="` + nsWsu + `" wsu:Id="` + bodyID + `">` + trzba + `</soapenv:Body>`
 }
 
-// signedInfoInner vrátí obsah ds:SignedInfo (bez obalového elementu).
+// signedInfoInner returns the content of ds:SignedInfo (without the element itself).
 func signedInfoInner(bodyID, digest string) string {
 	return `<ds:CanonicalizationMethod Algorithm="` + algC14N + `">` +
 		`<ec:InclusiveNamespaces xmlns:ec="` + nsEc + `" PrefixList="soapenv v4"></ec:InclusiveNamespaces>` +
@@ -90,8 +91,8 @@ func signedInfoInner(bodyID, digest string) string {
 		`<ds:DigestValue>` + digest + `</ds:DigestValue></ds:Reference>`
 }
 
-// canonicalSignedInfo vrátí ds:SignedInfo po kanonizaci Exclusive C14N
-// s PrefixList="soapenv v4". Tento tvar se podepisuje.
+// canonicalSignedInfo returns ds:SignedInfo after Exclusive C14N with
+// PrefixList="soapenv v4". This is what gets signed.
 func canonicalSignedInfo(bodyID, digest string) string {
 	return `<ds:SignedInfo xmlns:ds="` + nsDs + `" xmlns:soapenv="` + nsSoap + `" xmlns:v4="` + nsEET + `">` +
 		signedInfoInner(bodyID, digest) + `</ds:SignedInfo>`
@@ -110,12 +111,12 @@ func b64sha256(s string) string {
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
-// buildEnvelope sestaví a podepíše kompletní SOAP zprávu.
-func buildEnvelope(hlavicka, data []attr, cert *x509.Certificate, key crypto.Signer) ([]byte, error) {
+// buildEnvelope builds and signs the complete SOAP message.
+func buildEnvelope(header, data []attr, cert *x509.Certificate, key crypto.Signer) ([]byte, error) {
 	id := randomID()
 	bodyID := "id-" + id
 	tokenID := "X509-" + id
-	trzba := trzbaXML(hlavicka, data)
+	trzba := trzbaXML(header, data)
 
 	digest := b64sha256(canonicalBody(bodyID, trzba))
 	si := sha256.Sum256([]byte(canonicalSignedInfo(bodyID, digest)))
@@ -142,7 +143,7 @@ func buildEnvelope(hlavicka, data []attr, cert *x509.Certificate, key crypto.Sig
 
 	out := []byte(`<?xml version="1.0" encoding="UTF-8"?>` + b.String())
 	if len(out) > maxMessageSize {
-		return nil, &ValidationError{"zprava", "", "datová zpráva přesahuje 12 kB"}
+		return nil, &ValidationError{"message", "", "data message exceeds 12 kB"}
 	}
 	return out, nil
 }

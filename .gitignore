@@ -1,4 +1,4 @@
-# Pokladní certifikáty a klíče nepatří do repozitáře
+# Cash register certificates and keys do not belong in the repository
 *.p12
 *.pfx
 *.key

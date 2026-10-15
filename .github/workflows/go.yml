@@ -15,11 +15,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-      - name: Ověření závislostí
+      - name: Verify dependencies
         run: go mod verify
       - name: gofmt
         run: test -z "$(gofmt -l .)"
       - name: go vet
         run: go vet ./...
-      - name: Testy
+      - name: Tests
         run: go test -race -cover ./...

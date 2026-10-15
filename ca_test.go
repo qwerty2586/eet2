@@ -22,20 +22,20 @@ import (
 
 func init() { pollUnit = 10 * time.Millisecond }
 
-// fakeCA simuluje API CA EET podle caeetapi_jwt.yml.
+// fakeCA simulates the CA EET API per caeetapi_jwt.yml.
 type fakeCA struct {
 	t      *testing.T
 	mu     sync.Mutex
-	certs  map[string]*x509.Certificate // x5t#S256 → certifikát, kterým se lze přihlásit
+	certs  map[string]*x509.Certificate // x5t#S256 → certificate allowed to sign in
 	reqs   map[string]*fakeReq
 	p12    []byte
 	pass   string
 	calls  map[string]int
-	polls  int  // kolikrát vrátit INPROCESS
-	reject bool // zamítnout žádost
-	// ackConflict: ack vrátí 409 a žádost přejde do FINISHED (ztracená odpověď)
+	polls  int  // how many times to return INPROCESS
+	reject bool // reject the request
+	// ackConflict: ack returns 409 and the request moves to FINISHED (lost reply)
 	ackConflict bool
-	tokenCerts  []string // x5t#S256 certifikátů, kterými byly podepsány tokeny
+	tokenCerts  []string // x5t#S256 of the certificates that signed tokens
 }
 
 type fakeReq struct {
@@ -57,6 +57,14 @@ func (ca *fakeCA) allow(c *x509.Certificate) {
 	ca.certs[base64.RawURLEncoding.EncodeToString(h[:])] = c
 }
 
+// set changes the fake CA's state under its lock (handlers may still be
+// running, e.g. after a client gave up on a request).
+func (ca *fakeCA) set(f func()) {
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	f()
+}
+
 func (ca *fakeCA) count(name string) int {
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
@@ -73,15 +81,15 @@ func caErr(w http.ResponseWriter, status, code int, msg string) {
 	writeJSON(w, status, map[string]any{"code": code, "message": msg})
 }
 
-// checkToken ověří JWT podle profilu bearerJwtRs256.
+// checkToken verifies the JWT against the bearerJwtRs256 profile.
 func (ca *fakeCA) checkToken(r *http.Request) error {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
-		return errors.New("chybí Bearer token")
+		return errors.New("missing Bearer token")
 	}
 	parts := strings.Split(strings.TrimPrefix(auth, "Bearer "), ".")
 	if len(parts) != 3 {
-		return errors.New("token nemá 3 části")
+		return errors.New("token does not have 3 parts")
 	}
 	b64 := base64.RawURLEncoding
 	hb, err := b64.DecodeString(parts[0])
@@ -96,12 +104,12 @@ func (ca *fakeCA) checkToken(r *http.Request) error {
 		return fmt.Errorf("alg %v", hdr["alg"])
 	}
 	if _, ok := hdr["x5c"]; ok {
-		return errors.New("x5c se nemá posílat")
+		return errors.New("x5c must not be sent")
 	}
 	thumb, _ := hdr["x5t#S256"].(string)
 	cert, ok := ca.certs[thumb]
 	if !ok {
-		return errors.New("neznámý certifikát x5t#S256")
+		return errors.New("unknown x5t#S256 certificate")
 	}
 	pb, err := b64.DecodeString(parts[1])
 	if err != nil {
@@ -120,7 +128,7 @@ func (ca *fakeCA) checkToken(r *http.Request) error {
 	}
 	h := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err := rsa.VerifyPKCS1v15(cert.PublicKey.(*rsa.PublicKey), crypto.SHA256, h[:], sig); err != nil {
-		return fmt.Errorf("podpis tokenu: %w", err)
+		return fmt.Errorf("token signature: %w", err)
 	}
 	ca.tokenCerts = append(ca.tokenCerts, thumb)
 	return nil
@@ -211,12 +219,12 @@ func (ca *fakeCA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// renewSetup připraví Dispatcher se starým certifikátem a CA, která vydá nový.
+// renewSetup prepares a Dispatcher with the old certificate and a CA that issues a new one.
 func renewSetup(t *testing.T) (d *Dispatcher, ca *fakeCA, oldCert, newCert *x509.Certificate) {
 	t.Helper()
 	oldCert, oldKey := testCert(t, "CZ00000019")
 	newCert, newKey := testCert(t, "CZ00000019")
-	p12, err := pkcs12.LegacyDES.Encode(newKey, newCert, nil, "ABcd1234") // CA EET vydává 3DES
+	p12, err := pkcs12.LegacyDES.Encode(newKey, newCert, nil, "ABcd1234") // CA EET issues 3DES
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,56 +239,56 @@ func renewSetup(t *testing.T) (d *Dispatcher, ca *fakeCA, oldCert, newCert *x509
 
 func TestRenewCertificateFullFlow(t *testing.T) {
 	d, ca, oldCert, newCert := renewSetup(t)
-	ca.polls = 2
+	ca.set(func() { ca.polls = 2 })
 
 	ren, err := d.RenewCertificate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ren.Certificate.Equal(newCert) || ren.Heslo != "ABcd1234" || len(ren.P12) == 0 {
+	if !ren.Certificate.Equal(newCert) || ren.Password != "ABcd1234" || len(ren.P12) == 0 {
 		t.Fatalf("Renewal %v", ren)
 	}
 	if !d.Certificate().Equal(oldCert) {
-		t.Fatal("před Confirm se nemá přepnout certifikát")
+		t.Fatal("the certificate must not switch before Confirm")
 	}
 	if ca.count("ack") != 0 {
-		t.Fatal("převzetí se nemá potvrdit před Confirm")
+		t.Fatal("receipt must not be confirmed before Confirm")
 	}
 	if ca.count("renew") != 1 || ca.count("status") != 3 || ca.count("claim") != 1 {
-		t.Fatalf("volání %v", ca.calls)
+		t.Fatalf("calls %v", ca.calls)
 	}
 
 	if err := ren.Confirm(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !d.Certificate().Equal(newCert) {
-		t.Fatal("po Confirm má Dispatcher používat nový certifikát")
+		t.Fatal("after Confirm the Dispatcher must use the new certificate")
 	}
 	if ca.count("ack") != 1 {
 		t.Fatalf("ack %d×", ca.count("ack"))
 	}
 	if err := ren.Confirm(context.Background()); err != nil || ca.count("ack") != 1 {
-		t.Fatalf("opakovaný Confirm: %v, ack %d×", err, ca.count("ack"))
+		t.Fatalf("repeated Confirm: %v, ack %d×", err, ca.count("ack"))
 	}
 
-	// Tržby se teď podepisují novým certifikátem.
+	// Sales are now signed with the new certificate.
 	x, _, err := d.BuildRequest(testReceipt())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(x), base64.StdEncoding.EncodeToString(newCert.Raw)) {
-		t.Fatal("zpráva neobsahuje nový certifikát")
+		t.Fatal("message does not contain the new certificate")
 	}
-	// Všechny tokeny podepsal starý certifikát.
+	// All tokens were signed with the old certificate.
 	oldThumb := sha256.Sum256(oldCert.Raw)
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
 	if len(ca.tokenCerts) == 0 {
-		t.Fatal("žádný token")
+		t.Fatal("no token")
 	}
 	for _, tc := range ca.tokenCerts {
 		if tc != base64.RawURLEncoding.EncodeToString(oldThumb[:]) {
-			t.Fatalf("token podepsán jiným certifikátem: %s", tc)
+			t.Fatalf("token signed with another certificate: %s", tc)
 		}
 	}
 }
@@ -292,19 +300,19 @@ func TestRenewCertificateResumesAfterCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Aplikace spadne před Confirm. Po restartu se zavolá znovu.
+	// The application crashes before Confirm and calls again after restart.
 	second, err := d.RenewCertificate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.ReqID != first.ReqID || !second.Certificate.Equal(newCert) {
-		t.Fatalf("nenavázalo na žádost %s, má %s", first.ReqID, second.ReqID)
+		t.Fatalf("did not resume request %s, got %s", first.ReqID, second.ReqID)
 	}
 	if ca.count("renew") != 1 {
-		t.Fatalf("podána druhá žádost: renew %d×", ca.count("renew"))
+		t.Fatalf("filed a second request: renew %d×", ca.count("renew"))
 	}
 	if !d.Certificate().Equal(oldCert) {
-		t.Fatal("bez Confirm se nemá přepnout certifikát")
+		t.Fatal("the certificate must not switch without Confirm")
 	}
 	if err := second.Confirm(context.Background()); err != nil {
 		t.Fatal(err)
@@ -313,38 +321,38 @@ func TestRenewCertificateResumesAfterCrash(t *testing.T) {
 
 func TestRenewCertificateResumesInProcess(t *testing.T) {
 	d, ca, _, _ := renewSetup(t)
-	ca.reqs["3fa85f64-5717-4562-b3fc-2c963f66afa6"] = &fakeReq{state: caStateInProcess, polls: 1}
+	ca.set(func() { ca.reqs["3fa85f64-5717-4562-b3fc-2c963f66afa6"] = &fakeReq{state: caStateInProcess, polls: 1} })
 	ren, err := d.RenewCertificate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ren.ReqID != "3fa85f64-5717-4562-b3fc-2c963f66afa6" || ca.count("renew") != 0 {
-		t.Fatalf("nenavázalo na rozpracovanou žádost: %s, renew %d×", ren.ReqID, ca.count("renew"))
+		t.Fatalf("did not resume the unfinished request: %s, renew %d×", ren.ReqID, ca.count("renew"))
 	}
 }
 
 func TestRenewCertificateRejected(t *testing.T) {
 	d, ca, _, _ := renewSetup(t)
-	ca.reject = true
+	ca.set(func() { ca.reject = true })
 	_, err := d.RenewCertificate(context.Background())
 	var re *RejectedError
 	if !errors.As(err, &re) || re.Reason != "Selhání kontroly parametrů žádosti" {
-		t.Fatalf("chci RejectedError, mám %v", err)
+		t.Fatalf("want RejectedError, got %v", err)
 	}
 }
 
 func TestRenewConfirmConflictButFinished(t *testing.T) {
 	d, ca, _, newCert := renewSetup(t)
-	ca.ackConflict = true
+	ca.set(func() { ca.ackConflict = true })
 	ren, err := d.RenewCertificate(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := ren.Confirm(context.Background()); err != nil {
-		t.Fatalf("409 při již potvrzeném převzetí má projít: %v", err)
+		t.Fatalf("409 on an already confirmed receipt must succeed: %v", err)
 	}
 	if !d.Certificate().Equal(newCert) {
-		t.Fatal("certifikát se nepřepnul")
+		t.Fatal("certificate did not switch")
 	}
 }
 
@@ -354,26 +362,28 @@ func TestRenewConfirmWithExpiredOldCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Starý certifikát mezitím vypršel, CA ho už nepřijme; nový ano.
-	h := sha256.Sum256(oldCert.Raw)
-	delete(ca.certs, base64.RawURLEncoding.EncodeToString(h[:]))
-	ca.allow(newCert)
+	// The old certificate expired meanwhile: the CA rejects it but accepts the new one.
+	ca.set(func() {
+		h := sha256.Sum256(oldCert.Raw)
+		delete(ca.certs, base64.RawURLEncoding.EncodeToString(h[:]))
+		ca.allow(newCert)
+	})
 	if err := ren.Confirm(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !d.Certificate().Equal(newCert) {
-		t.Fatal("certifikát se nepřepnul")
+		t.Fatal("certificate did not switch")
 	}
 }
 
 func TestRenewBadP12NotAcknowledged(t *testing.T) {
 	d, ca, _, _ := renewSetup(t)
-	ca.pass = "Spatne12"
+	ca.set(func() { ca.pass = "Wrong123" })
 	if _, err := d.RenewCertificate(context.Background()); err == nil {
-		t.Fatal("chybné heslo k PKCS#12 mělo selhat")
+		t.Fatal("a wrong PKCS#12 password should fail")
 	}
 	if ca.count("ack") != 0 {
-		t.Fatal("nečitelný certifikát se nesmí potvrdit")
+		t.Fatal("an unreadable certificate must not be confirmed")
 	}
 }
 
@@ -381,39 +391,43 @@ func TestRenewWrongEICRejected(t *testing.T) {
 	d, ca, _, _ := renewSetup(t)
 	other, otherKey := testCert(t, "CZ8551015704")
 	p12, _ := pkcs12.LegacyDES.Encode(otherKey, other, nil, "ABcd1234")
-	ca.p12 = p12
+	ca.set(func() { ca.p12 = p12 })
 	if _, err := d.RenewCertificate(context.Background()); err == nil || !strings.Contains(err.Error(), "CZ8551015704") {
-		t.Fatalf("certifikát na jiné EIČ měl selhat, mám %v", err)
+		t.Fatalf("a certificate for another EIČ should fail, got %v", err)
 	}
 }
 
 func TestRenewContextCancel(t *testing.T) {
 	d, ca, _, _ := renewSetup(t)
-	ca.polls = 1000
+	ca.set(func() { ca.polls = 1000 })
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err := d.RenewCertificate(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("chci DeadlineExceeded, mám %v", err)
+		t.Fatalf("want DeadlineExceeded, got %v", err)
 	}
-	// Žádost u CA zůstává a příští volání na ni naváže.
-	ca.polls = 0
-	for _, rq := range ca.reqs {
-		rq.polls = 0
-	}
+	// The request stays at the CA and the next call resumes it.
+	ca.set(func() {
+		ca.polls = 0
+		for _, rq := range ca.reqs {
+			rq.polls = 0
+		}
+	})
 	if _, err := d.RenewCertificate(context.Background()); err != nil || ca.count("renew") != 1 {
-		t.Fatalf("navázání po zrušení: %v, renew %d×", err, ca.count("renew"))
+		t.Fatalf("resume after cancel: %v, renew %d×", err, ca.count("renew"))
 	}
 }
 
 func TestRenewUnauthorized(t *testing.T) {
 	d, ca, oldCert, _ := renewSetup(t)
-	h := sha256.Sum256(oldCert.Raw)
-	delete(ca.certs, base64.RawURLEncoding.EncodeToString(h[:]))
+	ca.set(func() {
+		h := sha256.Sum256(oldCert.Raw)
+		delete(ca.certs, base64.RawURLEncoding.EncodeToString(h[:]))
+	})
 	_, err := d.RenewCertificate(context.Background())
 	var ce *CAError
 	if !errors.As(err, &ce) || ce.StatusCode != 401 || ce.Code != 2 || ce.Temporary() {
-		t.Fatalf("chci CAError 401, mám %v", err)
+		t.Fatalf("want CAError 401, got %v", err)
 	}
 }
 
@@ -421,11 +435,11 @@ func TestRenewNeedsCAService(t *testing.T) {
 	cert, key := testCert(t, "CZ00000019")
 	d, _ := NewDispatcherWithSigner(PlaygroundService, cert, key)
 	if _, err := d.RenewCertificate(context.Background()); err == nil {
-		t.Fatal("bez CA služby má selhat")
+		t.Fatal("should fail without a CA service")
 	}
 	p, _ := NewDispatcherWithSigner(ProductionService, cert, key)
 	if p.ca != CAProductionService {
-		t.Fatalf("produkce má výchozí CA %q", p.ca)
+		t.Fatalf("production default CA is %q", p.ca)
 	}
 }
 
@@ -437,12 +451,12 @@ func TestRenewalStringHidesSecrets(t *testing.T) {
 	}
 	for _, s := range []string{fmt.Sprint(ren), fmt.Sprintf("%v", ren), fmt.Sprintf("%#v", ren), fmt.Sprintf("%+v", ren)} {
 		if strings.Contains(s, "ABcd1234") || strings.Contains(s, "P12:") {
-			t.Fatalf("výpis prozrazuje tajné údaje: %s", s)
+			t.Fatalf("output leaks secrets: %s", s)
 		}
 	}
 }
 
-// Výměna certifikátu za běhu nesmí kolidovat se souběžným odesíláním (go test -race).
+// Swapping the certificate at runtime must not race with concurrent sends (go test -race).
 func TestUpdateCertificateConcurrent(t *testing.T) {
 	certA, keyA := testCert(t, "CZ00000019")
 	certB, keyB := testCert(t, "CZ00000019")
@@ -482,7 +496,7 @@ func TestUpdateCertificateConcurrent(t *testing.T) {
 	wg.Wait()
 
 	if err := d.UpdateCertificate(certA, keyB); err == nil {
-		t.Fatal("klíč nepatřící k certifikátu měl selhat")
+		t.Fatal("a key not matching the certificate should fail")
 	}
 	p12, _ := pkcs12.Modern.Encode(keyB, certB, nil, "x")
 	if err := d.UpdateCertificateFromP12(p12, "x"); err != nil || !d.Certificate().Equal(certB) {

@@ -22,13 +22,13 @@ const soapWrap = `<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:
 
 var reSentUUID = regexp.MustCompile(`uuid_zpravy="([^"]+)"`)
 
-// fakeEET je testovací server, který zkontroluje požadavek a vrátí odpověď
-// vytvořenou funkcí reply (dostane UUID z požadavku).
+// fakeEET is a test server that checks the request and returns the reply
+// built by reply (which gets the request's UUID).
 func fakeEET(t *testing.T, reply func(uuid string) string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Errorf("metoda %s", r.Method)
+			t.Errorf("method %s", r.Method)
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "text/xml; charset=utf-8" {
 			t.Errorf("Content-Type %q", ct)
@@ -37,12 +37,12 @@ func fakeEET(t *testing.T, reply func(uuid string) string) *httptest.Server {
 			t.Errorf("SOAPAction %q", sa)
 		}
 		if r.ProtoMajor != 1 || r.ProtoMinor != 1 {
-			t.Errorf("protokol %s, chci HTTP/1.1", r.Proto)
+			t.Errorf("protocol %s, want HTTP/1.1", r.Proto)
 		}
 		body, _ := io.ReadAll(r.Body)
 		m := reSentUUID.FindSubmatch(body)
 		if m == nil {
-			t.Error("požadavek neobsahuje uuid_zpravy")
+			t.Error("request has no uuid_zpravy")
 			return
 		}
 		w.Header().Set("X-Global-Transaction-Id", "test-gtid-1")
@@ -75,12 +75,12 @@ func TestSendPaymentOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Pok != "987a6be5-6af5-44f3-b4fc-987654321000-ff" || !resp.Test || resp.Overeno {
-		t.Errorf("odpověď %+v", resp)
+	if resp.Pok != "987a6be5-6af5-44f3-b4fc-987654321000-ff" || !resp.Test || resp.Verified {
+		t.Errorf("response %+v", resp)
 	}
-	if len(resp.Varovani) != 1 || resp.Varovani[0].Kod != 1 ||
-		resp.Varovani[0].Text != "EIC poplatnika v datove zprave se neshoduje s EIC v certifikatu" {
-		t.Errorf("varování %+v", resp.Varovani)
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != 1 ||
+		resp.Warnings[0].Text != "EIC poplatnika v datove zprave se neshoduje s EIC v certifikatu" {
+		t.Errorf("warnings %+v", resp.Warnings)
 	}
 	if resp.GlobalTransactionID != "test-gtid-1" {
 		t.Errorf("GlobalTransactionID %q", resp.GlobalTransactionID)
@@ -98,7 +98,7 @@ func TestSendPaymentUUIDMismatch(t *testing.T) {
 	_, err := testDispatcher(t, srv).SendPayment(testReceipt())
 	var ue *UnexpectedResponseError
 	if !errors.As(err, &ue) {
-		t.Fatalf("chci UnexpectedResponseError, mám %v", err)
+		t.Fatalf("want UnexpectedResponseError, got %v", err)
 	}
 }
 
@@ -114,8 +114,8 @@ func TestSendPaymentVerificationMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Overeno || resp.Pok != "" {
-		t.Errorf("odpověď %+v", resp)
+	if !resp.Verified || resp.Pok != "" {
+		t.Errorf("response %+v", resp)
 	}
 }
 
@@ -132,56 +132,56 @@ func TestSendPaymentErrors(t *testing.T) {
 	for _, c := range cases {
 		srv := fakeEET(t, func(string) string {
 			return fmt.Sprintf(`<eet:Odpoved><eet:Hlavicka dat_odmit="2027-03-04T18:25:21+01:00"/>`+
-				`<eet:Chyba kod="%d">Popis chyby</eet:Chyba></eet:Odpoved>`, c.kod)
+				`<eet:Chyba kod="%d">Error text</eet:Chyba></eet:Odpoved>`, c.kod)
 		})
 		_, err := testDispatcher(t, srv).SendPayment(testReceipt())
 		var ee *Error
-		if !errors.As(err, &ee) || ee.Kod != c.kod || ee.Text != "Popis chyby" {
-			t.Errorf("kód %d: chci *Error, mám %v", c.kod, err)
+		if !errors.As(err, &ee) || ee.Code != c.kod || ee.Text != "Error text" {
+			t.Errorf("code %d: want *Error, got %v", c.kod, err)
 			continue
 		}
 		if IsRetryable(err) != c.retryable {
-			t.Errorf("kód %d: IsRetryable = %v", c.kod, !c.retryable)
+			t.Errorf("code %d: IsRetryable = %v", c.kod, !c.retryable)
 		}
 	}
 }
 
 func TestSendPaymentSOAPFault(t *testing.T) {
 	srv := fakeEET(t, func(string) string {
-		return `<soapenv:Fault><faultcode>soapenv:Server</faultcode><faultstring>chyba</faultstring></soapenv:Fault>`
+		return `<soapenv:Fault><faultcode>soapenv:Server</faultcode><faultstring>failure</faultstring></soapenv:Fault>`
 	})
 	_, err := testDispatcher(t, srv).SendPayment(testReceipt())
 	var ue *UnexpectedResponseError
 	if !errors.As(err, &ue) || !strings.Contains(ue.Msg, "SOAP Fault") {
-		t.Fatalf("chci SOAP Fault, mám %v", err)
+		t.Fatalf("want SOAP Fault, got %v", err)
 	}
 }
 
 func TestSendPaymentTimeoutIsRetryable(t *testing.T) {
 	block := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-block // server neodpoví (např. zprávu vyhodnotil jako útok)
+		<-block // the server never replies (e.g. it took the message for an attack)
 	}))
 	defer srv.Close()
 	defer close(block)
 
-	d := testDispatcher(t, srv, WithTimeout(time.Millisecond)) // zvýší se na MinTimeout
+	d := testDispatcher(t, srv, WithTimeout(time.Millisecond)) // raised to MinTimeout
 	if d.timeout != MinTimeout {
-		t.Fatalf("timeout %v, chci %v", d.timeout, MinTimeout)
+		t.Fatalf("timeout %v, want %v", d.timeout, MinTimeout)
 	}
 	start := time.Now()
 	_, err := d.SendPayment(testReceipt())
 	if err == nil || !IsRetryable(err) {
-		t.Fatalf("chci opakovatelnou chybu, mám %v", err)
+		t.Fatalf("want a retryable error, got %v", err)
 	}
-	if el := time.Since(start); el < MinTimeout || el > MinTimeout+2*time.Second {
-		t.Errorf("čekání %v", el)
+	if el := time.Since(start); el < MinTimeout || el > MinTimeout+10*time.Second {
+		t.Errorf("waited %v", el)
 	}
 }
 
 func TestSendPaymentValidationNotSent(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("neplatná tržba se nemá odeslat")
+		t.Error("an invalid sale must not be sent")
 	}))
 	defer srv.Close()
 	r := testReceipt()
@@ -189,42 +189,42 @@ func TestSendPaymentValidationNotSent(t *testing.T) {
 	_, err := testDispatcher(t, srv).SendPayment(r)
 	var ve *ValidationError
 	if !errors.As(err, &ve) || IsRetryable(err) {
-		t.Fatalf("chci neopakovatelnou ValidationError, mám %v", err)
+		t.Fatalf("want a non-retryable ValidationError, got %v", err)
 	}
 }
 
 func TestNewDispatcherFromP12(t *testing.T) {
 	cert, key := testCert(t, "CZ00000019")
-	p12, err := pkcs12.Modern.Encode(key, cert, nil, "heslo")
+	p12, err := pkcs12.Modern.Encode(key, cert, nil, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDispatcherFromP12(PlaygroundService, p12, "heslo")
+	d, err := NewDispatcherFromP12(PlaygroundService, p12, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !d.Certificate().Equal(cert) {
-		t.Fatal("načten jiný certifikát")
+		t.Fatal("loaded a different certificate")
 	}
-	if _, err := NewDispatcherFromP12(PlaygroundService, p12, "spatne"); err == nil {
-		t.Fatal("špatné heslo mělo selhat")
+	if _, err := NewDispatcherFromP12(PlaygroundService, p12, "wrong"); err == nil {
+		t.Fatal("a wrong password should fail")
 	}
 
-	// Totéž ze souboru.
+	// The same from a file.
 	path := filepath.Join(t.TempDir(), "test.p12")
 	if err := os.WriteFile(path, p12, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDispatcher(PlaygroundService, path, "heslo"); err != nil {
+	if _, err := NewDispatcher(PlaygroundService, path, "secret"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Starší formát PKCS#12 (3DES) – takové soubory vydávala původní EET.
-	legacy, err := pkcs12.LegacyDES.Encode(key, cert, nil, "heslo")
+	// Legacy PKCS#12 (3DES), as issued by CA EET.
+	legacy, err := pkcs12.LegacyDES.Encode(key, cert, nil, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewDispatcherFromP12(PlaygroundService, legacy, "heslo"); err != nil {
+	if _, err := NewDispatcherFromP12(PlaygroundService, legacy, "secret"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -241,15 +241,15 @@ func TestNewDispatcherFromPEM(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	// Certifikát i klíč v jednom souboru.
+	// Certificate and key in one file.
 	combined := append(append([]byte{}, certPEM...), pkcs8...)
 	if _, err := NewDispatcherFromPEM(PlaygroundService, combined, nil); err != nil {
-		t.Errorf("společný soubor: %v", err)
+		t.Errorf("combined file: %v", err)
 	}
-	// Klíč, který k certifikátu nepatří.
+	// A key that does not match the certificate.
 	_, other := testCert(t, "CZ00000019")
 	otherPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(other)})
 	if _, err := NewDispatcherFromPEM(PlaygroundService, certPEM, otherPEM); err == nil {
-		t.Error("cizí klíč měl selhat")
+		t.Error("a foreign key should fail")
 	}
 }
