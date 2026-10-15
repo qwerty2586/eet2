@@ -120,6 +120,33 @@ func TestFormatTime(t *testing.T) {
 	if got := formatTime(summer); got != "2027-06-09T05:25:28+02:00" {
 		t.Errorf("summer time: %s", got)
 	}
+
+	// Fractional seconds are truncated, never rounded up.
+	frac := time.Date(2027, 1, 8, 20, 19, 38, 999_999_999, time.UTC)
+	if got := formatTime(frac); got != "2027-01-08T21:19:38+01:00" {
+		t.Errorf("fractional seconds: %s", got)
+	}
+
+	// The repeated hour when clocks go back (25 Oct 2026, 03:00 CEST -> 02:00 CET).
+	first := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
+	second := time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC)
+	if a, b := formatTime(first), formatTime(second); a != "2026-10-25T02:30:00+02:00" || b != "2026-10-25T02:30:00+01:00" {
+		t.Errorf("repeated hour: %s, %s", a, b)
+	}
+
+	// The system time zone does not matter.
+	saved := time.Local
+	defer func() { time.Local = saved }()
+	for _, name := range []string{"UTC", "America/New_York", "Asia/Tokyo"} {
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Local = loc
+		if got := formatTime(winter.In(time.Local)); got != "2027-01-09T04:25:28+01:00" {
+			t.Errorf("time.Local=%s: %s", name, got)
+		}
+	}
 }
 
 func TestNewUUID(t *testing.T) {

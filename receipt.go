@@ -53,7 +53,10 @@ type Receipt struct {
 	PoradCis string
 
 	// DatTrzby is when the sale took place (dat_trzby). It is sent in the
-	// Europe/Prague time zone (+01:00 / +02:00).
+	// Europe/Prague time zone (+01:00 / +02:00) regardless of the system
+	// time zone. Fractional seconds are dropped: truncate the time with
+	// Truncate(time.Second) before storing it, so a resend loaded from the
+	// database matches (see docs/retries.md).
 	DatTrzby time.Time
 
 	// CelkTrzba is the total amount in CZK including taxes (celk_trzba),
