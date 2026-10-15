@@ -231,3 +231,33 @@ func (r Receipt) UniqueKey() (string, error) {
 	return r.EicPopl + "|" + strconv.Itoa(r.IdJednotky) + "|" + r.IdPokl + "|" +
 		r.PoradCis + "|" + formatTime(r.DatTrzby) + "|" + amount, nil
 }
+
+// RegisterKey is a helper for preventing collisions. It returns
+// "eic_popl*id_jednotky*id_pokl*dat_trzby" with the values normalised exactly
+// as they are sent (dat_trzby in Europe/Prague, whole seconds).
+//
+// The specification requires this combination to be unique: one id_pokl
+// may not register two sales in the same second within a registration unit.
+// Store it in a column with a unique index, and when an insert fails on it,
+// assign another id_pokl (or wait a second) before sending. Uniqueness of
+// this key also guarantees uniqueness of the porad_cis combination, which
+// only adds porad_cis to it.
+//
+// The separator "*" cannot appear in any of the fields, so two different
+// combinations never produce the same key. Unlike UniqueKey, it does not
+// include porad_cis or the amount.
+func (r Receipt) RegisterKey() (string, error) {
+	if !reEIC.MatchString(r.EicPopl) {
+		return "", &ValidationError{"eic_popl", r.EicPopl, "expected CZ followed by 8 to 10 digits"}
+	}
+	if r.IdJednotky < 1 || r.IdJednotky > 999999999 {
+		return "", &ValidationError{"id_jednotky", strconv.Itoa(r.IdJednotky), "must be 1 to 999999999"}
+	}
+	if !reIdPokl.MatchString(r.IdPokl) {
+		return "", &ValidationError{"id_pokl", r.IdPokl, "1–20 characters from 0-9 a-z A-Z . , : ; / # - _ and space"}
+	}
+	if r.DatTrzby.IsZero() {
+		return "", &ValidationError{"dat_trzby", "", "sale date and time is missing"}
+	}
+	return r.EicPopl + "*" + strconv.Itoa(r.IdJednotky) + "*" + r.IdPokl + "*" + formatTime(r.DatTrzby), nil
+}

@@ -204,3 +204,52 @@ func TestUniqueKey(t *testing.T) {
 		t.Fatalf("%s, want %s", k, want)
 	}
 }
+
+func TestRegisterKey(t *testing.T) {
+	r := testReceipt()
+	k, err := r.RegisterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "CZ00000019*181*RECEPCE*2027-01-08T21:19:38+01:00"; k != want {
+		t.Fatalf("%s, want %s", k, want)
+	}
+
+	// The same second in another time zone and with milliseconds is the same key,
+	// because the server sees the same dat_trzby.
+	same := r
+	same.DatTrzby = r.DatTrzby.UTC().Add(750 * time.Millisecond)
+	if k2, _ := same.RegisterKey(); k2 != k {
+		t.Errorf("same second: %s != %s", k2, k)
+	}
+
+	// Sequence number and amount do not matter; register and second do.
+	other := r
+	other.PoradCis, other.CelkTrzba = "2027/000999", decimal.NewFromInt(1)
+	if k2, _ := other.RegisterKey(); k2 != k {
+		t.Errorf("porad_cis and amount must not affect the key: %s", k2)
+	}
+	for name, mutate := range map[string]func(*Receipt){
+		"next second":    func(r *Receipt) { r.DatTrzby = r.DatTrzby.Add(time.Second) },
+		"other register": func(r *Receipt) { r.IdPokl = "ORD1" },
+		"other unit":     func(r *Receipt) { r.IdJednotky = 182 },
+	} {
+		x := r
+		mutate(&x)
+		if k2, _ := x.RegisterKey(); k2 == k {
+			t.Errorf("%s: key must differ", name)
+		}
+	}
+
+	// Invalid fields are rejected, so "*" can never sneak into a field.
+	bad := r
+	bad.IdPokl = "A*B"
+	if _, err := bad.RegisterKey(); err == nil {
+		t.Error("id_pokl with * must be rejected")
+	}
+	bad = r
+	bad.DatTrzby = time.Time{}
+	if _, err := bad.RegisterKey(); err == nil {
+		t.Error("missing dat_trzby must be rejected")
+	}
+}

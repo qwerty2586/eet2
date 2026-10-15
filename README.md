@@ -56,6 +56,8 @@ in English.
 - **Certificate renewal through the CA EET API:** `RenewCertificate` and `Confirm`, swapped at
   runtime without a restart. → [docs/certificates.md](docs/certificates.md), ready-made program
   in [example/certificate_renewal](example/certificate_renewal)
+- **Collision helper:** `RegisterKey()` for a unique database index, so one `id_pokl` never
+  registers two sales in the same second. → [docs/collisions.md](docs/collisions.md)
 - **Validation before sending** against the formats from the specification. The sale fields are
   described in the [`Receipt`](https://pkg.go.dev/github.com/qwerty2586/eet2#Receipt) documentation.
 
