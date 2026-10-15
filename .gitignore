@@ -1,0 +1,5 @@
+# Pokladní certifikáty a klíče nepatří do repozitáře
+*.p12
+*.pfx
+*.key
+*.pem
