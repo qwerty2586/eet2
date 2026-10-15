@@ -20,6 +20,27 @@ d, err := eet2.NewDispatcherWithSigner(eet2.ProductionService, cert, signer)
 
 From a string, `[]byte(s)` is enough. For Base64 use `base64.StdEncoding.DecodeString(s)`.
 
+## Checking a certificate and its password
+
+`CheckP12` checks a `.p12` without creating a Dispatcher: the password, that it holds an RSA key
+and that the key matches the certificate. It works offline and returns the certificate, so you
+can show its EIČ and validity, e.g. when a user uploads a certificate:
+
+```go
+cert, err := eet2.CheckP12(p12, password)
+switch {
+case errors.Is(err, eet2.ErrIncorrectPassword):
+	// wrong password
+case err != nil:
+	// corrupt file, missing key, key does not match the certificate…
+default:
+	fmt.Println(cert.Subject.CommonName, "valid until", cert.NotAfter) // CZ00000019 valid until …
+}
+```
+
+The Dispatcher constructors (`NewDispatcher`, `NewDispatcherFromP12`, `UpdateCertificateFromP12`)
+return the same `ErrIncorrectPassword` for a wrong password.
+
 ## Renewal through the CA EET API
 
 A cash register certificate is valid for 366 days. The Dispatcher can renew it through the EET

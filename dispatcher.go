@@ -69,6 +69,25 @@ func newCredentials(cert *x509.Certificate, key crypto.Signer) (*credentials, er
 	return &credentials{cert: cert, key: key}, nil
 }
 
+// ErrIncorrectPassword is returned (wrapped) when a PKCS#12 password is wrong.
+// Check it with errors.Is(err, eet2.ErrIncorrectPassword).
+var ErrIncorrectPassword = pkcs12.ErrIncorrectPassword
+
+// CheckP12 checks a PKCS#12 certificate without creating a Dispatcher: that
+// the password is correct, that it contains an RSA key and that the key
+// matches the certificate. It returns the certificate (EIČ in
+// Subject.CommonName, validity in NotBefore/NotAfter). Nothing is sent
+// anywhere.
+//
+// A wrong password gives an error matching errors.Is(err, ErrIncorrectPassword).
+func CheckP12(p12 []byte, password string) (*x509.Certificate, error) {
+	c, err := credentialsFromP12(p12, password)
+	if err != nil {
+		return nil, err
+	}
+	return c.cert, nil
+}
+
 func credentialsFromP12(p12 []byte, password string) (*credentials, error) {
 	key, cert, _, err := pkcs12.DecodeChain(p12, password)
 	if err != nil {

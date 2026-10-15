@@ -46,7 +46,8 @@ in English.
 ## Features
 
 - **Certificate from a file or from memory:** `.p12` as `[]byte`, PEM, or your own
-  `crypto.Signer` (HSM, KMS). → [docs/certificates.md](docs/certificates.md)
+  `crypto.Signer` (HSM, KMS). `CheckP12` verifies a certificate and its password offline.
+  → [docs/certificates.md](docs/certificates.md)
 - **Exact amounts:** `decimal.Decimal` instead of `float64`. The library does not round; amounts
   with more than two decimal places are rejected. → [docs/amounts.md](docs/amounts.md)
 - **Resending after a failure:** `eet2.IsRetryable(err)` and `Opakovane: true`.

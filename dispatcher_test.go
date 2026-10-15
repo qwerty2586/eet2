@@ -253,3 +253,32 @@ func TestNewDispatcherFromPEM(t *testing.T) {
 		t.Error("a foreign key should fail")
 	}
 }
+
+func TestCheckP12(t *testing.T) {
+	cert, key := testCert(t, "CZ00000019")
+	for name, enc := range map[string]*pkcs12.Encoder{"modern": pkcs12.Modern, "legacy 3DES": pkcs12.LegacyDES} {
+		p12, err := enc.Encode(key, cert, nil, "ABcd1234")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := CheckP12(p12, "ABcd1234")
+		if err != nil || !got.Equal(cert) || got.Subject.CommonName != "CZ00000019" {
+			t.Errorf("%s: correct password: %v", name, err)
+		}
+
+		_, err = CheckP12(p12, "wrong")
+		if !errors.Is(err, ErrIncorrectPassword) {
+			t.Errorf("%s: want ErrIncorrectPassword, got %v", name, err)
+		}
+		// The same error comes out of the Dispatcher constructors.
+		if _, err := NewDispatcherFromP12(PlaygroundService, p12, "wrong"); !errors.Is(err, ErrIncorrectPassword) {
+			t.Errorf("%s: NewDispatcherFromP12: want ErrIncorrectPassword, got %v", name, err)
+		}
+	}
+
+	// A corrupt file is an error, but not a wrong password.
+	if _, err := CheckP12([]byte("not a p12 file"), "ABcd1234"); err == nil || errors.Is(err, ErrIncorrectPassword) {
+		t.Errorf("corrupt file: want a non-password error, got %v", err)
+	}
+}
