@@ -1,8 +1,6 @@
 package eet2
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -10,6 +8,7 @@ import (
 	"time"
 	_ "time/tzdata" // Europe/Prague even on systems without tzdata
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -122,16 +121,12 @@ func formatAmount(v decimal.Decimal) (string, error) {
 	return v.StringFixed(2), nil
 }
 
-// NewUUID returns a random version 4 UUID.
+// NewUUID returns a random version 4 UUID (github.com/google/uuid).
+//
+// EET accepts only UUID versions 1 to 5, so do not use version 7 for
+// UuidZpravy.
 func NewUUID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	s := hex.EncodeToString(b[:])
-	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
+	return uuid.NewString()
 }
 
 // Validate checks the sale against the formats from the specification.
