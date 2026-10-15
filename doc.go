@@ -6,9 +6,9 @@
 // synchronously to the tax administration and returns the confirmation code
 // (POK) or an error. It can also renew the certificate through the CA EET API.
 //
-// Fields that map to EET message attributes keep their Czech names
-// (EicPopl, PoradCis, CelkTrzba, Pok, …) so they match the official
-// specification.
+// All Receipt fields and the EET reply attributes keep their Czech names
+// (EicPopl, PoradCis, CelkTrzba, Opakovane, Pok, …) so they match the
+// official specification.
 //
 // Amounts are decimal.Decimal (github.com/shopspring/decimal) with at most
 // two decimal places. Rounding is up to the application so that the
@@ -30,7 +30,7 @@
 //	})
 //	if err != nil {
 //		if eet2.IsRetryable(err) {
-//			// queue the sale and send it again with Resend: true
+//			// queue the sale and send it again with Opakovane: true
 //		}
 //		log.Fatal(err)
 //	}

@@ -248,7 +248,7 @@ func (d *Dispatcher) BuildRequest(r Receipt) (xml []byte, uuid string, err error
 // SendPayment sends the sale and returns the reply with the POK.
 //
 // On error, check IsRetryable(err): if true, store the sale and send it
-// again with the same data and Resend: true (within 48 hours at the latest).
+// again with the same data and Opakovane: true (within 48 hours at the latest).
 func (d *Dispatcher) SendPayment(r Receipt) (*Response, error) {
 	return d.SendPaymentContext(context.Background(), r)
 }

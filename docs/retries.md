@@ -2,7 +2,7 @@
 
 Communication with EET is synchronous (request/response). When no reply arrives, there is no way
 to tell whether the server accepted the sale. It must then be sent again **with the same data**
-and `Resend` set. A new UUID is generated automatically. The server recognises a resend of the
+and `Opakovane` set. A new UUID is generated automatically. The server recognises a resend of the
 same sale and does not count it twice.
 
 ```go
@@ -11,7 +11,7 @@ if eet2.IsRetryable(err) {
 	// network failure, timeout or temporary server error (code -1):
 	// queue r and send it again without undue delay,
 	// within 48 hours at the latest
-	r.Resend = true
+	r.Opakovane = true
 	queue.Push(r)
 }
 ```

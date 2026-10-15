@@ -78,7 +78,7 @@ const (
 )
 
 // IsRetryable reports whether the same sale should be sent again
-// (with Resend: true): a connection failure, timeout or temporary server
+// (with Opakovane: true): a connection failure, timeout or temporary server
 // error. It returns false for validation errors and critical message errors.
 func IsRetryable(err error) bool {
 	if err == nil {

@@ -164,7 +164,7 @@ func TestValidate(t *testing.T) {
 func TestAttrsOptionalFields(t *testing.T) {
 	r := testReceipt()
 	r.UuidZpravy = "e23e5a5a-08d7-4a08-844d-2b6c6b60621d"
-	r.Resend = true
+	r.Opakovane = true
 	r.Overeni = true
 	r.EicPoverujiciho = "CZ8551015704"
 	r.PovereniVicePopl = true

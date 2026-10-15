@@ -33,7 +33,7 @@ func Example() {
 	resp, err := d.SendPayment(r)
 	if eet2.IsRetryable(err) {
 		// No POK: queue the sale and send it again, within 48 hours.
-		r.Resend = true
+		r.Opakovane = true
 		resp, err = d.SendPayment(r)
 	}
 	if err != nil {

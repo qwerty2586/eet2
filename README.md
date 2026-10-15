@@ -39,8 +39,9 @@ if err != nil {
 fmt.Println("POK:", resp.Pok)
 ```
 
-Fields that map to EET message attributes keep their Czech names (`EicPopl`, `PoradCis`,
-`CelkTrzba`, `Pok`, …) so they match the official specification. Everything else is in English.
+All `Receipt` fields and the EET reply attributes keep their Czech names (`EicPopl`, `PoradCis`,
+`CelkTrzba`, `Opakovane`, `Pok`, …) so they match the official specification. Everything else is
+in English.
 
 ## Features
 
@@ -48,7 +49,7 @@ Fields that map to EET message attributes keep their Czech names (`EicPopl`, `Po
   `crypto.Signer` (HSM, KMS). → [docs/certificates.md](docs/certificates.md)
 - **Exact amounts:** `decimal.Decimal` instead of `float64`. The library does not round; amounts
   with more than two decimal places are rejected. → [docs/amounts.md](docs/amounts.md)
-- **Resending after a failure:** `eet2.IsRetryable(err)` and `Resend: true`.
+- **Resending after a failure:** `eet2.IsRetryable(err)` and `Opakovane: true`.
   → [docs/retries.md](docs/retries.md)
 - **Certificate renewal through the CA EET API:** `RenewCertificate` and `Confirm`, swapped at
   runtime without a restart. → [docs/certificates.md](docs/certificates.md), ready-made program

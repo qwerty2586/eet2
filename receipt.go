@@ -24,9 +24,9 @@ type Receipt struct {
 	// resends.
 	UuidZpravy string
 
-	// Resend marks a repeated send of the same sale (prvni_zaslani=false),
+	// Opakovane marks a repeated send of the same sale (prvni_zaslani=false),
 	// typically after a connection failure. The sale data must not change.
-	Resend bool
+	Opakovane bool
 
 	// Overeni enables verification mode (overeni): the server only checks
 	// the message and does not register the sale.
@@ -163,7 +163,7 @@ func (r Receipt) attrs(now time.Time) (header, data []attr, err error) {
 	header = []attr{
 		{"uuid_zpravy", uuid},
 		{"dat_odesl", formatTime(now)},
-		{"prvni_zaslani", boolStr(!r.Resend)},
+		{"prvni_zaslani", boolStr(!r.Opakovane)},
 	}
 	if r.Overeni {
 		header = append(header, attr{"overeni", "true"})
