@@ -18,6 +18,9 @@ go test ./...
   `x5t#S256` thumbprint, and covers resuming after a crash, rejection, a lost confirmation and
   an expired old certificate.
 - Swapping the certificate at runtime is tested with concurrent sends under `go test -race`.
+- **Sending was verified against the live EET 2.0 playground** with `example/playground` and an
+  official test certificate: the server accepted the signed message and returned a test POK
+  ending in `-ff`.
 
 ## Trying it on the playground
 
