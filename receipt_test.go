@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 func testCert(t *testing.T, eic string) (*x509.Certificate, *rsa.PrivateKey) {
@@ -42,34 +44,69 @@ func testReceipt() Receipt {
 		IdPokl:     "RECEPCE",
 		PoradCis:   "2027/000123",
 		DatTrzby:   time.Date(2027, 1, 8, 21, 19, 38, 0, prague),
-		CelkTrzba:  250,
+		CelkTrzba:  decimal.NewFromInt(250),
 	}
 }
 
 func TestFormatAmount(t *testing.T) {
-	ok := map[float64]string{
-		0:            "0.00",
-		250:          "250.00",
-		81.6:         "81.60",
-		0.56:         "0.56",
-		-187.2:       "-187.20",
-		-0.01:        "-0.01",
-		-0.001:       "0.00", // žádné "-0.00"
-		20.45:        "20.45",
-		0.1 + 0.2:    "0.30",
-		1.005:        "1.00", // float 1.005 je ve skutečnosti 1.00499…
-		99999999.99:  "99999999.99",
-		-99999999.99: "-99999999.99",
+	ok := map[string]string{
+		"0":            "0.00",
+		"-0":           "0.00", // žádné "-0.00"
+		"0.00":         "0.00",
+		"250":          "250.00",
+		"81.6":         "81.60",
+		"81.60":        "81.60",
+		"81.600":       "81.60", // nuly navíc nevadí
+		"0.56":         "0.56",
+		"-187.2":       "-187.20",
+		"-0.01":        "-0.01",
+		"20.45":        "20.45",
+		"0020.45":      "20.45", // žádné vedoucí nuly
+		"99999999.99":  "99999999.99",
+		"-99999999.99": "-99999999.99",
 	}
-	for v, want := range ok {
-		got, err := formatAmount(v)
+	for in, want := range ok {
+		got, err := formatAmount(decimal.RequireFromString(in))
 		if err != nil || got != want {
-			t.Errorf("formatAmount(%v) = %q, %v; chci %q", v, got, err, want)
+			t.Errorf("formatAmount(%s) = %q, %v; chci %q", in, got, err, want)
 		}
 	}
-	for _, v := range []float64{100000000, -100000000, 1e300} {
-		if _, err := formatAmount(v); err == nil {
-			t.Errorf("formatAmount(%v) měl vrátit chybu", v)
+	for _, in := range []string{"100000000", "-100000000", "1e300", "1.005", "12.345", "-0.001", "0.1234"} {
+		if got, err := formatAmount(decimal.RequireFromString(in)); err == nil {
+			t.Errorf("formatAmount(%s) = %q, měl vrátit chybu", in, got)
+		}
+	}
+}
+
+// Postup z README: zaokrouhlení výpočtu před odesláním.
+func TestReadmeRounding(t *testing.T) {
+	cena := decimal.RequireFromString("10.15")
+	sDph := cena.Mul(decimal.RequireFromString("1.21")) // 12.2815
+	if _, err := formatAmount(sDph); err == nil {
+		t.Fatal("nezaokrouhlená částka měla být odmítnuta")
+	}
+	cases := []struct {
+		name string
+		got  decimal.Decimal
+		want string
+	}{
+		{"Round(2)", sDph.Round(2), "12.28"},
+		{"Round(2) půlka", decimal.RequireFromString("12.345").Round(2), "12.35"},
+		{"Round(2) záporná půlka", decimal.RequireFromString("-12.345").Round(2), "-12.35"},
+		{"RoundBank(2)", decimal.RequireFromString("12.345").RoundBank(2), "12.34"},
+		{"Round(0) hotovost", decimal.RequireFromString("81.60").Round(0), "82.00"},
+		{"RoundFloor(0) hotovost dolů", decimal.RequireFromString("24.80").RoundFloor(0), "24.00"},
+		{"NewFromFloat", decimal.NewFromFloat(1.005).Round(2), "1.01"},
+		{"Round(0) celkem", sDph.Round(2).Round(0), "12.00"},
+		{"RoundCeil(0)", decimal.RequireFromString("24.20").RoundCeil(0), "25.00"},
+		{"RoundFloor(0) záporná", decimal.RequireFromString("-24.80").RoundFloor(0), "-25.00"},
+		{"haléře", decimal.New(25050, -2), "250.50"},
+		{"celé koruny", decimal.NewFromInt(250), "250.00"},
+	}
+	for _, c := range cases {
+		got, err := formatAmount(c.got)
+		if err != nil || got != c.want {
+			t.Errorf("%s: %q, %v; chci %q", c.name, got, err, c.want)
 		}
 	}
 }
@@ -110,8 +147,8 @@ func TestValidate(t *testing.T) {
 		"id_pokl":          func(r *Receipt) { r.IdPokl = "Pokladna č. 1" },
 		"porad_cis":        func(r *Receipt) { r.PoradCis = "" },
 		"dat_trzby":        func(r *Receipt) { r.DatTrzby = time.Time{} },
-		"celk_trzba":       func(r *Receipt) { r.CelkTrzba = 1e9 },
-		"cerp_zuct":        func(r *Receipt) { r.CerpZuct = Castka(-1e9) },
+		"celk_trzba":       func(r *Receipt) { r.CelkTrzba = decimal.RequireFromString("12.345") },
+		"cerp_zuct":        func(r *Receipt) { r.CerpZuct = decimal.NewNullDecimal(decimal.NewFromInt(-1e9)) },
 		"uuid_zpravy":      func(r *Receipt) { r.UuidZpravy = "abc" },
 	}
 	for field, mutate := range bad {
@@ -131,8 +168,8 @@ func TestAttrsOptionalFields(t *testing.T) {
 	r.Overeni = true
 	r.EicPoverujiciho = "CZ8551015704"
 	r.PovereniVicePopl = true
-	r.UrcenoCerpZuct = Castka(343)
-	r.CerpZuct = Castka(237)
+	r.UrcenoCerpZuct = decimal.NewNullDecimal(decimal.NewFromInt(343))
+	r.CerpZuct = decimal.NewNullDecimal(decimal.NewFromInt(237))
 	h, d, err := r.attrs(time.Date(2027, 1, 8, 21, 19, 40, 0, prague))
 	if err != nil {
 		t.Fatal(err)

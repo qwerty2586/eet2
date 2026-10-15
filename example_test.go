@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/qwerty2586/eet2"
+	"github.com/shopspring/decimal"
 )
 
 func Example() {
@@ -26,7 +27,7 @@ func Example() {
 		IdPokl:     "RECEPCE",
 		PoradCis:   "2027/000123",
 		DatTrzby:   time.Now(),
-		CelkTrzba:  250.00,
+		CelkTrzba:  decimal.RequireFromString("250.00"),
 	}
 	resp, err := d.SendPayment(r)
 	if eet2.IsRetryable(err) {

@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math"
 	"regexp"
 	"strconv"
 	"time"
 	_ "time/tzdata" // časová zóna Europe/Prague i na systémech bez tzdata
+
+	"github.com/shopspring/decimal"
 )
 
 // Receipt jsou údaje o jedné evidované tržbě.
@@ -51,19 +52,18 @@ type Receipt struct {
 	DatTrzby time.Time
 
 	// CelkTrzba je celková částka tržby v Kč včetně daní. Záporná u storna.
-	CelkTrzba float64
+	// Smí mít nejvýše dvě desetinná místa: zaokrouhlení je na aplikaci,
+	// aby se evidovaná částka shodovala s dokladem (viz README).
+	CelkTrzba decimal.Decimal
 
 	// UrcenoCerpZuct je částka určená k následnému čerpání nebo zúčtování
-	// (nabití kreditu). Nil = položka se neuvádí. Viz Castka.
-	UrcenoCerpZuct *float64
+	// (nabití kreditu). Valid=false znamená, že se položka neuvádí.
+	UrcenoCerpZuct decimal.NullDecimal
 
 	// CerpZuct je částka, která je následným čerpáním nebo zúčtováním
-	// (čerpání kreditu). Nil = položka se neuvádí. Viz Castka.
-	CerpZuct *float64
+	// (čerpání kreditu). Valid=false znamená, že se položka neuvádí.
+	CerpZuct decimal.NullDecimal
 }
-
-// Castka vrátí ukazatel na částku pro nepovinné položky UrcenoCerpZuct a CerpZuct.
-func Castka(v float64) *float64 { return &v }
 
 // ValidationError popisuje údaj, který neodpovídá formátu ze specifikace.
 // Takovou zprávu nemá smysl odesílat ani opakovat.
@@ -100,23 +100,19 @@ func formatTime(t time.Time) string {
 	return t.In(prague).Format("2006-01-02T15:04:05-07:00")
 }
 
+var maxAmount = decimal.NewFromInt(100_000_000)
+
 // formatAmount převede částku na tvar ze specifikace: přesně dvě desetinná
 // místa, tečka, bez vedoucích nul, bez "-0.00", |v| < 100 000 000.
-func formatAmount(v float64) (string, error) {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return "", errors.New("částka není konečné číslo")
+// Částku s více než dvěma desetinnými místy odmítne – nezaokrouhluje.
+func formatAmount(v decimal.Decimal) (string, error) {
+	if !v.Equal(v.Truncate(2)) {
+		return "", errors.New("částka má víc než dvě desetinná místa, zaokrouhlete ji před odesláním (viz README)")
 	}
-	c := math.Round(v * 100)
-	if math.Abs(c) >= 1e10 {
+	if v.Abs().Cmp(maxAmount) >= 0 {
 		return "", errors.New("částka musí být v absolutní hodnotě menší než 100 000 000 Kč")
 	}
-	h := int64(c)
-	sign := ""
-	if h < 0 {
-		sign = "-"
-		h = -h
-	}
-	return fmt.Sprintf("%s%d.%02d", sign, h/100, h%100), nil
+	return v.StringFixed(2), nil
 }
 
 // NewUUID vrátí náhodné UUID verze 4.
@@ -198,19 +194,19 @@ func (r Receipt) attrs(now time.Time) (hlavicka, data []attr, err error) {
 
 	amounts := []struct {
 		name string
-		v    *float64
+		v    decimal.NullDecimal
 	}{
-		{"celk_trzba", &r.CelkTrzba},
+		{"celk_trzba", decimal.NewNullDecimal(r.CelkTrzba)},
 		{"urceno_cerp_zuct", r.UrcenoCerpZuct},
 		{"cerp_zuct", r.CerpZuct},
 	}
 	for _, a := range amounts {
-		if a.v == nil {
+		if !a.v.Valid {
 			continue
 		}
-		s, err := formatAmount(*a.v)
+		s, err := formatAmount(a.v.Decimal)
 		if err != nil {
-			return nil, nil, &ValidationError{a.name, fmt.Sprint(*a.v), err.Error()}
+			return nil, nil, &ValidationError{a.name, a.v.Decimal.String(), err.Error()}
 		}
 		data = append(data, attr{a.name, s})
 	}

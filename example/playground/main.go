@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/qwerty2586/eet2"
+	"github.com/shopspring/decimal"
 )
 
 func main() {
@@ -40,7 +41,7 @@ func main() {
 		IdPokl:     "TEST1",
 		PoradCis:   fmt.Sprintf("T%d", time.Now().Unix()),
 		DatTrzby:   time.Now(),
-		CelkTrzba:  123.45,
+		CelkTrzba:  decimal.RequireFromString("123.45"),
 		Overeni:    *overeni,
 	})
 	if err != nil {

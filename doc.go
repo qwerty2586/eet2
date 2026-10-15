@@ -6,6 +6,10 @@
 // odešle ji synchronně na společné technické zařízení správce daně
 // a vrátí potvrzovací kód (POK) nebo chybu.
 //
+// Částky jsou decimal.Decimal (github.com/shopspring/decimal) a smí mít
+// nejvýše dvě desetinná místa. Zaokrouhlení je na aplikaci, aby evidovaná
+// částka odpovídala dokladu.
+//
 // Základní použití:
 //
 //	d, err := eet2.NewDispatcherFromP12(eet2.PlaygroundService, p12Bytes, "heslo")
@@ -18,7 +22,7 @@
 //		IdPokl:     "RECEPCE",
 //		PoradCis:   "2027/000123",
 //		DatTrzby:   time.Now(),
-//		CelkTrzba:  250.00,
+//		CelkTrzba:  decimal.RequireFromString("250.00"),
 //	})
 //	if err != nil {
 //		if eet2.IsRetryable(err) {
